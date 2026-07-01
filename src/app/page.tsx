@@ -1,5 +1,6 @@
 "use client";
 
+import type { ChangeEvent } from "react";
 import { useState } from "react";
 
 type Lane = "Prep" | "Hob" | "Oven" | "Passive" | "Serve";
@@ -12,6 +13,11 @@ type TimelineTask = {
   instruction: string;
   shortLabel: string;
   track?: number;
+};
+
+type UploadedImage = {
+  name: string;
+  previewUrl: string;
 };
 
 const currentMinute = 18;
@@ -219,12 +225,115 @@ function TaskSummary({
   );
 }
 
+function ImageUploadCard({
+  id,
+  title,
+  description,
+  image,
+  onImageChange,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  image: UploadedImage | null;
+  onImageChange: (image: UploadedImage | null) => void;
+}) {
+  function handleChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      onImageChange(null);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        onImageChange({ name: file.name, previewUrl: reader.result });
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+      <div className="flex min-h-full flex-col gap-4">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+          <p className="mt-1 text-sm text-[#6d5e51]">{description}</p>
+        </div>
+
+        <label
+          htmlFor={id}
+          className="flex min-h-48 cursor-pointer items-center justify-center rounded-md border border-dashed border-[#cbb79d] bg-[#fffaf3] text-center transition hover:border-[#8a5a22]"
+        >
+          {image ? (
+            <span
+              role="img"
+              aria-label={`${title} preview`}
+              className="block h-48 w-full rounded-md bg-cover bg-center"
+              style={{ backgroundImage: `url(${image.previewUrl})` }}
+            />
+          ) : (
+            <span className="px-6 text-sm font-medium text-[#6d5e51]">
+              Select image
+            </span>
+          )}
+        </label>
+
+        <input
+          id={id}
+          type="file"
+          accept="image/*"
+          onChange={handleChange}
+          className="sr-only"
+        />
+
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-sm text-[#6d5e51]">
+            {image ? image.name : "No image selected"}
+          </p>
+          <label
+            htmlFor={id}
+            className="shrink-0 cursor-pointer rounded-md border border-[#ddcdb9] px-3 py-2 text-sm font-semibold text-[#3e342d] transition hover:border-[#8a5a22]"
+          >
+            Choose
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
+  const [recipeImage, setRecipeImage] = useState<UploadedImage | null>(null);
+  const [dishImage, setDishImage] = useState<UploadedImage | null>(null);
+  const [extracted, setExtracted] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState(activeTasks[0].id);
   const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const selectedTask =
     tasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0];
   const expandedTaskId = hoveredTaskId ?? selectedTask.id;
+  const canExtract = Boolean(recipeImage && dishImage);
+
+  function handleRecipeImageChange(image: UploadedImage | null) {
+    setRecipeImage(image);
+    setExtracted(false);
+  }
+
+  function handleDishImageChange(image: UploadedImage | null) {
+    setDishImage(image);
+    setExtracted(false);
+  }
+
+  function handleExtractRecipe() {
+    if (!canExtract) {
+      return;
+    }
+
+    setSelectedTaskId(activeTasks[0].id);
+    setExtracted(true);
+  }
 
   return (
     <main className="min-h-screen bg-[#fffaf3] text-[#211b16]">
@@ -241,14 +350,64 @@ export default function Home() {
               Turn recipes into cooking timelines
             </p>
           </div>
-          <button
-            type="button"
-            className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-[#fffaf3]"
-          >
-            Upload recipe photo
-          </button>
+          <p className="rounded-md border border-[#ddcdb9] bg-white px-4 py-3 text-sm font-medium text-[#6d5e51]">
+            Local prototype only
+          </p>
         </header>
 
+        <section aria-labelledby="upload-recipe" className="space-y-5">
+          <div>
+            <h2
+              id="upload-recipe"
+              className="text-2xl font-semibold tracking-tight"
+            >
+              Upload recipe photos
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm text-[#6d5e51]">
+              Add a recipe photo and a finished dish photo. Extraction is
+              simulated for now using the Tomato Pasta Bake sample timeline.
+            </p>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <ImageUploadCard
+              id="recipe-photo"
+              title="Recipe / instructions / ingredients"
+              description="Photo of the written recipe, ingredients, or cooking instructions."
+              image={recipeImage}
+              onImageChange={handleRecipeImageChange}
+            />
+            <ImageUploadCard
+              id="dish-photo"
+              title="Finished dish"
+              description="Photo of the dish you are aiming to cook."
+              image={dishImage}
+              onImageChange={handleDishImageChange}
+            />
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg border border-[#ddcdb9] bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold text-[#211b16]">
+                Ready to extract a timeline
+              </p>
+              <p className="mt-1 text-sm text-[#6d5e51]">
+                No AI call happens yet. This button reveals the hardcoded
+                Tomato Pasta Bake timeline.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleExtractRecipe}
+              disabled={!canExtract}
+              className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
+            >
+              Extract recipe
+            </button>
+          </div>
+        </section>
+
+        {extracted ? (
         <section aria-labelledby="sample-timeline" className="space-y-6">
           <div>
             <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -503,6 +662,17 @@ export default function Home() {
             </aside>
           </section>
         </section>
+        ) : (
+          <section className="rounded-lg border border-[#ddcdb9] bg-white p-8 text-center">
+            <h2 className="text-2xl font-semibold tracking-tight">
+              Timeline preview
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[#6d5e51]">
+              Select both photos, then choose Extract recipe to simulate a
+              timeline from the hardcoded Tomato Pasta Bake data.
+            </p>
+          </section>
+        )}
       </section>
     </main>
   );
