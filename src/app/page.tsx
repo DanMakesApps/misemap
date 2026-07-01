@@ -1,10 +1,16 @@
+"use client";
+
+import { useState } from "react";
+
 type Lane = "Prep" | "Hob" | "Oven" | "Passive" | "Serve";
 
 type TimelineTask = {
+  id: number;
   lane: Lane;
   startMinute: number;
   durationMinutes: number;
-  title: string;
+  instruction: string;
+  shortLabel: string;
   track?: number;
 };
 
@@ -15,69 +21,103 @@ const minuteMarkers = [0, 15, 30, 45, 60];
 
 const tasks: TimelineTask[] = [
   {
+    id: 1,
     lane: "Oven",
     startMinute: 0,
     durationMinutes: 10,
-    title: "Preheat oven to 180\u00b0C",
+    instruction: "Preheat oven to 180\u00b0C",
+    shortLabel: "Preheat",
   },
   {
+    id: 2,
     lane: "Prep",
     startMinute: 0,
     durationMinutes: 8,
-    title: "Chop onion, garlic, and carrot",
+    instruction: "Chop onion, garlic, and carrot",
+    shortLabel: "Chop veg",
   },
   {
+    id: 3,
     lane: "Hob",
     startMinute: 0,
     durationMinutes: 12,
-    title: "Bring salted pasta water to the boil",
+    instruction: "Bring salted pasta water to the boil",
+    shortLabel: "Boil water",
   },
   {
+    id: 4,
     lane: "Hob",
     startMinute: 8,
     durationMinutes: 6,
-    title: "Saut\u00e9 onion and carrot",
+    instruction: "Saut\u00e9 onion and carrot",
+    shortLabel: "Saut\u00e9 veg",
     track: 1,
   },
   {
+    id: 5,
     lane: "Hob",
     startMinute: 14,
     durationMinutes: 1,
-    title: "Add garlic",
+    instruction: "Add garlic",
+    shortLabel: "Garlic",
     track: 1,
   },
   {
+    id: 6,
     lane: "Hob",
     startMinute: 15,
     durationMinutes: 18,
-    title: "Simmer tomato sauce",
+    instruction: "Simmer tomato sauce",
+    shortLabel: "Simmer sauce",
   },
   {
+    id: 7,
     lane: "Hob",
     startMinute: 20,
     durationMinutes: 10,
-    title: "Cook pasta",
+    instruction: "Cook pasta",
+    shortLabel: "Cook pasta",
     track: 1,
   },
   {
+    id: 8,
     lane: "Prep",
     startMinute: 30,
     durationMinutes: 5,
-    title: "Drain pasta and mix with sauce",
+    instruction: "Drain pasta and mix with sauce",
+    shortLabel: "Mix pasta",
   },
   {
+    id: 9,
     lane: "Prep",
     startMinute: 35,
     durationMinutes: 3,
-    title: "Transfer to baking dish and add cheese",
+    instruction: "Transfer to baking dish and add cheese",
+    shortLabel: "Add cheese",
   },
-  { lane: "Oven", startMinute: 38, durationMinutes: 15, title: "Bake pasta" },
-  { lane: "Passive", startMinute: 53, durationMinutes: 5, title: "Rest" },
   {
+    id: 10,
+    lane: "Oven",
+    startMinute: 38,
+    durationMinutes: 15,
+    instruction: "Bake pasta",
+    shortLabel: "Bake",
+  },
+  {
+    id: 11,
+    lane: "Passive",
+    startMinute: 53,
+    durationMinutes: 5,
+    instruction: "Rest",
+    shortLabel: "Rest",
+  },
+  {
+    id: 12,
     lane: "Serve",
     startMinute: 58,
     durationMinutes: 2,
-    title: "Add herbs and serve",
+    instruction: "Add herbs and serve",
+    shortLabel: "Serve",
   },
 ];
 
@@ -88,6 +128,14 @@ const laneStyles: Record<Lane, string> = {
   Passive: "bg-[#6b7280] text-white",
   Serve: "bg-[#1f6f8b] text-white",
 };
+
+const laneLegend = [
+  { label: "Prep", className: laneStyles.Prep },
+  { label: "Hob", className: laneStyles.Hob },
+  { label: "Oven", className: laneStyles.Oven },
+  { label: "Passive", className: laneStyles.Passive },
+  { label: "Serve", className: laneStyles.Serve },
+];
 
 const activeTasks = tasks.filter(
   (task) =>
@@ -107,23 +155,77 @@ function formatMinuteRange(task: TimelineTask) {
   return `${task.startMinute}-${task.startMinute + task.durationMinutes} min`;
 }
 
-function TaskSummary({ task }: { task: TimelineTask }) {
+function getTaskWidth(task: TimelineTask) {
+  return `${(task.durationMinutes / totalMinutes) * 100}%`;
+}
+
+function getTaskLeft(task: TimelineTask) {
+  return `${(task.startMinute / totalMinutes) * 100}%`;
+}
+
+function getTaskStatus(task: TimelineTask) {
+  const endMinute = task.startMinute + task.durationMinutes;
+
+  if (task.startMinute <= currentMinute && currentMinute < endMinute) {
+    return "Active now";
+  }
+
+  if (currentMinute >= endMinute) {
+    return "Done";
+  }
+
+  return "Later";
+}
+
+function getWorkMode(task: TimelineTask) {
+  return task.lane === "Passive" ? "Passive" : "Active";
+}
+
+function getExpandedBlockLabel(task: TimelineTask) {
+  return `${task.id} ${task.shortLabel}`;
+}
+
+function TaskSummary({
+  task,
+  selected,
+  onSelect,
+}: {
+  task: TimelineTask;
+  selected: boolean;
+  onSelect: (taskId: number) => void;
+}) {
   return (
-    <li className="rounded-md border border-[#ddcdb9] bg-white px-3 py-2">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-semibold text-[#211b16]">
-          {task.title}
-        </span>
-        <span className="shrink-0 text-xs font-medium text-[#8a5a22]">
-          {formatMinuteRange(task)}
-        </span>
-      </div>
-      <p className="mt-1 text-xs text-[#6d5e51]">{task.lane}</p>
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelect(task.id)}
+        className={`w-full rounded-md border px-3 py-2 text-left transition ${
+          selected
+            ? "border-[#2f6f4e] bg-[#eef7f0]"
+            : "border-[#ddcdb9] bg-white hover:border-[#bda98d]"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-sm font-semibold text-[#211b16]">
+            {task.id}. {task.shortLabel}
+          </span>
+          <span className="shrink-0 text-xs font-medium text-[#8a5a22]">
+            {formatMinuteRange(task)}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-[#6d5e51]">{task.lane}</p>
+      </button>
     </li>
   );
 }
 
 export default function Home() {
+  const [selectedTaskId, setSelectedTaskId] = useState(activeTasks[0].id);
+  const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
+  const selectedTask =
+    tasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0];
+  const expandedTaskId = hoveredTaskId ?? selectedTask.id;
+
   return (
     <main className="min-h-screen bg-[#fffaf3] text-[#211b16]">
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-6 py-8 sm:px-10 lg:px-12">
@@ -147,10 +249,7 @@ export default function Home() {
           </button>
         </header>
 
-        <section
-          aria-labelledby="sample-timeline"
-          className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]"
-        >
+        <section aria-labelledby="sample-timeline" className="space-y-6">
           <div>
             <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
@@ -169,124 +268,240 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-[#ddcdb9] bg-white">
-              <div className="min-w-[920px] p-4">
-                <div className="grid grid-cols-[6rem_minmax(0,1fr)]">
-                  <div />
-                  <div className="relative h-7 text-xs font-medium text-[#8a5a22]">
-                    {minuteMarkers.map((minute) => (
-                      <span
-                        key={minute}
-                        className="absolute top-0 -translate-x-1/2"
-                        style={{ left: `${(minute / totalMinutes) * 100}%` }}
-                      >
-                        {minute}
-                      </span>
-                    ))}
-                  </div>
+            <div className="mb-4 flex flex-wrap gap-2">
+              {laneLegend.map((item) => (
+                <div
+                  key={item.label}
+                  className="inline-flex items-center gap-2 rounded-md border border-[#ddcdb9] bg-white px-3 py-2 text-sm font-medium text-[#3e342d]"
+                >
+                  <span
+                    className={`h-3 w-3 rounded-sm ${item.className}`}
+                    aria-hidden="true"
+                  />
+                  {item.label}
                 </div>
+              ))}
+            </div>
 
-                <div className="relative">
-                  <div className="pointer-events-none absolute bottom-0 left-24 right-0 top-0 z-10">
-                    {minuteMarkers.map((minute) => (
-                      <span
-                        key={`grid-${minute}`}
-                        aria-hidden="true"
-                        className="absolute bottom-0 top-0 w-px bg-[#eadccc]"
-                        style={{ left: `${(minute / totalMinutes) * 100}%` }}
-                      />
-                    ))}
-                    <span
-                      aria-hidden="true"
-                      className="absolute bottom-0 top-0 w-0.5 bg-[#211b16]"
-                      style={{
-                        left: `${(currentMinute / totalMinutes) * 100}%`,
-                      }}
-                    />
-                    <span
-                      className="absolute -top-7 -translate-x-1/2 rounded bg-[#211b16] px-2 py-1 text-xs font-semibold text-white"
-                      style={{
-                        left: `${(currentMinute / totalMinutes) * 100}%`,
-                      }}
-                    >
-                      Now
-                    </span>
+            <div className="rounded-lg border border-[#ddcdb9] bg-white">
+              <div className="border-b border-[#eadccc] px-4 py-3 text-sm text-[#6d5e51]">
+                Select a numbered task to see the full instruction.
+              </div>
+              <div className="overflow-x-auto">
+                <div className="min-w-[1120px] p-4">
+                  <div className="grid grid-cols-[7.5rem_minmax(0,1fr)]">
+                    <div className="sticky left-0 z-50 border-r border-[#eee3d5] bg-white" />
+                    <div className="relative h-8 text-xs font-semibold text-[#8a5a22]">
+                      {minuteMarkers.map((minute) => (
+                        <span
+                          key={minute}
+                          className="absolute top-0 -translate-x-1/2"
+                          style={{ left: `${(minute / totalMinutes) * 100}%` }}
+                        >
+                          {minute} min
+                        </span>
+                      ))}
+                    </div>
                   </div>
 
-                  {lanes.map((lane) => (
-                    <div
-                      key={lane}
-                      className="grid min-h-24 grid-cols-[6rem_minmax(0,1fr)] border-t border-[#eee3d5]"
-                    >
-                      <div className="flex items-center pr-4 text-sm font-semibold text-[#3e342d]">
-                        {lane}
-                      </div>
-                      <div className="relative my-3 rounded bg-[#f8efe3]">
-                        {tasks
-                          .filter((task) => task.lane === lane)
-                          .map((task) => (
-                            <div
-                              key={`${task.lane}-${task.startMinute}-${task.title}`}
-                              className={`absolute flex h-9 items-center overflow-hidden rounded-md px-3 text-xs font-semibold shadow-sm ${laneStyles[task.lane]}`}
-                              style={{
-                                left: `${(task.startMinute / totalMinutes) * 100}%`,
-                                top: `${0.5 + (task.track ?? 0) * 2.5}rem`,
-                                width: `${(task.durationMinutes / totalMinutes) * 100}%`,
-                              }}
-                              title={`${task.startMinute}-${
-                                task.startMinute + task.durationMinutes
-                              } ${task.lane}: ${task.title}`}
-                            >
-                              <span className="truncate">{task.title}</span>
-                            </div>
-                          ))}
-                      </div>
+                  <div className="relative">
+                    <div className="pointer-events-none absolute bottom-0 left-[7.5rem] right-0 top-0 z-10">
+                      {minuteMarkers.map((minute) => (
+                        <span
+                          key={`grid-${minute}`}
+                          aria-hidden="true"
+                          className="absolute bottom-0 top-0 w-px bg-[#eadccc]"
+                          style={{
+                            left: `${(minute / totalMinutes) * 100}%`,
+                          }}
+                        />
+                      ))}
+                      <span
+                        aria-hidden="true"
+                        className="absolute bottom-0 top-0 w-0.5 bg-[#211b16]"
+                        style={{
+                          left: `${(currentMinute / totalMinutes) * 100}%`,
+                        }}
+                      />
+                      <span
+                        className="absolute -top-7 -translate-x-1/2 rounded bg-[#211b16] px-2 py-1 text-xs font-semibold text-white"
+                        style={{
+                          left: `${(currentMinute / totalMinutes) * 100}%`,
+                        }}
+                      >
+                        Now
+                      </span>
                     </div>
-                  ))}
+
+                    {lanes.map((lane) => (
+                      <div
+                        key={lane}
+                        className="grid min-h-28 grid-cols-[7.5rem_minmax(0,1fr)] border-t border-[#eee3d5]"
+                      >
+                        <div className="sticky left-0 z-50 flex items-center border-r border-[#eee3d5] bg-white pr-4 text-sm font-semibold text-[#3e342d] shadow-[8px_0_12px_-12px_rgba(33,27,22,0.8)]">
+                          {lane}
+                        </div>
+                        <div className="relative my-3 rounded bg-[#f8efe3]">
+                          {tasks
+                            .filter((task) => task.lane === lane)
+                            .map((task) => {
+                              const selected = task.id === selectedTask.id;
+                              const expanded = task.id === expandedTaskId;
+
+                              return (
+                                <button
+                                  key={task.id}
+                                  type="button"
+                                  onClick={() => setSelectedTaskId(task.id)}
+                                  onFocus={() => setHoveredTaskId(task.id)}
+                                  onBlur={() => setHoveredTaskId(null)}
+                                  onMouseEnter={() => setHoveredTaskId(task.id)}
+                                  onMouseLeave={() => setHoveredTaskId(null)}
+                                  aria-pressed={selected}
+                                  className={`group absolute flex h-9 items-center justify-center rounded-md px-2 text-xs font-semibold shadow-sm transition-[filter,box-shadow,min-width] hover:z-40 hover:min-w-max hover:px-3 focus:z-40 focus:min-w-max focus:px-3 focus:outline-none focus:ring-2 focus:ring-[#211b16] focus:ring-offset-2 ${
+                                    laneStyles[task.lane]
+                                  } ${
+                                    selected
+                                      ? "ring-2 ring-[#211b16] ring-offset-2"
+                                      : "hover:brightness-95"
+                                  } ${
+                                    expanded
+                                      ? "z-40 min-w-max px-3"
+                                      : "z-20 overflow-hidden"
+                                  }`}
+                                  style={{
+                                    left: getTaskLeft(task),
+                                    top: `${0.5 + (task.track ?? 0) * 2.5}rem`,
+                                    width: getTaskWidth(task),
+                                  }}
+                                  title={`${task.id}. ${task.instruction}`}
+                                >
+                                  <span
+                                    className={
+                                      expanded
+                                        ? "whitespace-nowrap"
+                                        : "truncate group-hover:overflow-visible group-hover:text-clip group-hover:whitespace-nowrap group-focus:overflow-visible group-focus:text-clip group-focus:whitespace-nowrap"
+                                    }
+                                  >
+                                    {expanded
+                                      ? getExpandedBlockLabel(task)
+                                      : getExpandedBlockLabel(task)}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <aside className="rounded-lg border border-[#ddcdb9] bg-white p-5">
-            <h2 className="text-xl font-semibold tracking-tight">
-              Now / Next / Later
-            </h2>
-            <div className="mt-5 space-y-5">
-              <section>
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                  Now
-                </h3>
-                <ul className="mt-2 space-y-2">
-                  {activeTasks.map((task) => (
-                    <TaskSummary key={`now-${task.title}`} task={task} />
-                  ))}
-                </ul>
-              </section>
+          <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+            <aside className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                Selected task
+              </p>
+              <div className="mt-4 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-semibold tracking-tight">
+                    {selectedTask.id}. {selectedTask.shortLabel}
+                  </h2>
+                  <p className="mt-2 text-lg text-[#3e342d]">
+                    {selectedTask.instruction}
+                  </p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${laneStyles[selectedTask.lane]}`}
+                >
+                  {selectedTask.lane}
+                </span>
+              </div>
 
-              {nextTask ? (
+              <dl className="mt-6 grid gap-4 sm:grid-cols-3">
+                <div className="rounded-md bg-[#f8efe3] p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a5a22]">
+                    Timing
+                  </dt>
+                  <dd className="mt-1 font-semibold">
+                    {formatMinuteRange(selectedTask)}
+                  </dd>
+                </div>
+                <div className="rounded-md bg-[#f8efe3] p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a5a22]">
+                    Status
+                  </dt>
+                  <dd className="mt-1 font-semibold">
+                    {getTaskStatus(selectedTask)}
+                  </dd>
+                </div>
+                <div className="rounded-md bg-[#f8efe3] p-3">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8a5a22]">
+                    Mode
+                  </dt>
+                  <dd className="mt-1 font-semibold">
+                    {getWorkMode(selectedTask)}
+                  </dd>
+                </div>
+              </dl>
+            </aside>
+
+            <aside className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+              <h2 className="text-xl font-semibold tracking-tight">
+                Now / Next / Later
+              </h2>
+              <div className="mt-5 space-y-5">
                 <section>
                   <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                    Next
+                    Now
                   </h3>
                   <ul className="mt-2 space-y-2">
-                    <TaskSummary task={nextTask} />
+                    {activeTasks.map((task) => (
+                      <TaskSummary
+                        key={`now-${task.id}`}
+                        task={task}
+                        selected={task.id === selectedTask.id}
+                        onSelect={setSelectedTaskId}
+                      />
+                    ))}
                   </ul>
                 </section>
-              ) : null}
 
-              <section>
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                  Later
-                </h3>
-                <ul className="mt-2 space-y-2">
-                  {laterTasks.map((task) => (
-                    <TaskSummary key={`later-${task.title}`} task={task} />
-                  ))}
-                </ul>
-              </section>
-            </div>
-          </aside>
+                {nextTask ? (
+                  <section>
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                      Next
+                    </h3>
+                    <ul className="mt-2 space-y-2">
+                      <TaskSummary
+                        task={nextTask}
+                        selected={nextTask.id === selectedTask.id}
+                        onSelect={setSelectedTaskId}
+                      />
+                    </ul>
+                  </section>
+                ) : null}
+
+                <section>
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                    Later
+                  </h3>
+                  <ul className="mt-2 space-y-2">
+                    {laterTasks.map((task) => (
+                      <TaskSummary
+                        key={`later-${task.id}`}
+                        task={task}
+                        selected={task.id === selectedTask.id}
+                        onSelect={setSelectedTaskId}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              </div>
+            </aside>
+          </section>
         </section>
       </section>
     </main>
