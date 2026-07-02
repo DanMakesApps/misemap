@@ -4,6 +4,7 @@ import type { ChangeEvent } from "react";
 import { useState } from "react";
 
 type Lane = "Prep" | "Hob" | "Oven" | "Passive" | "Serve";
+type WorkMode = "Active" | "Passive";
 
 type TimelineTask = {
   id: number;
@@ -12,12 +13,32 @@ type TimelineTask = {
   durationMinutes: number;
   instruction: string;
   shortLabel: string;
-  track?: number;
+  workMode: WorkMode;
+  track?: number | null;
+};
+
+type Ingredient = {
+  name: string;
+  amount: string;
+};
+
+type RecipeData = {
+  title: string;
+  servings: number | null;
+  ingredients: Ingredient[];
+  tasks: TimelineTask[];
+  assumptions: string[];
+  uncertainties: string[];
 };
 
 type UploadedImage = {
   name: string;
   previewUrl: string;
+};
+
+type ExtractRecipeResponse = {
+  recipe?: RecipeData;
+  error?: string;
 };
 
 const currentMinute = 18;
@@ -33,6 +54,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 10,
     instruction: "Preheat oven to 180\u00b0C",
     shortLabel: "Preheat",
+    workMode: "Passive",
   },
   {
     id: 2,
@@ -41,6 +63,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 8,
     instruction: "Chop onion, garlic, and carrot",
     shortLabel: "Chop veg",
+    workMode: "Active",
   },
   {
     id: 3,
@@ -49,6 +72,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 12,
     instruction: "Bring salted pasta water to the boil",
     shortLabel: "Boil water",
+    workMode: "Passive",
   },
   {
     id: 4,
@@ -57,6 +81,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 6,
     instruction: "Saut\u00e9 onion and carrot",
     shortLabel: "Saut\u00e9 veg",
+    workMode: "Active",
     track: 1,
   },
   {
@@ -66,6 +91,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 1,
     instruction: "Add garlic",
     shortLabel: "Garlic",
+    workMode: "Active",
     track: 1,
   },
   {
@@ -75,6 +101,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 18,
     instruction: "Simmer tomato sauce",
     shortLabel: "Simmer sauce",
+    workMode: "Passive",
   },
   {
     id: 7,
@@ -83,6 +110,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 10,
     instruction: "Cook pasta",
     shortLabel: "Cook pasta",
+    workMode: "Active",
     track: 1,
   },
   {
@@ -92,6 +120,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 5,
     instruction: "Drain pasta and mix with sauce",
     shortLabel: "Mix pasta",
+    workMode: "Active",
   },
   {
     id: 9,
@@ -100,6 +129,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 3,
     instruction: "Transfer to baking dish and add cheese",
     shortLabel: "Add cheese",
+    workMode: "Active",
   },
   {
     id: 10,
@@ -108,6 +138,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 15,
     instruction: "Bake pasta",
     shortLabel: "Bake",
+    workMode: "Passive",
   },
   {
     id: 11,
@@ -116,6 +147,7 @@ const tasks: TimelineTask[] = [
     durationMinutes: 5,
     instruction: "Rest",
     shortLabel: "Rest",
+    workMode: "Passive",
   },
   {
     id: 12,
@@ -124,8 +156,26 @@ const tasks: TimelineTask[] = [
     durationMinutes: 2,
     instruction: "Add herbs and serve",
     shortLabel: "Serve",
+    workMode: "Active",
   },
 ];
+
+const sampleRecipe: RecipeData = {
+  title: "Tomato Pasta Bake",
+  servings: 4,
+  ingredients: [
+    { name: "Pasta", amount: "300g" },
+    { name: "Onion", amount: "1" },
+    { name: "Garlic", amount: "2 cloves" },
+    { name: "Carrot", amount: "1" },
+    { name: "Tomato sauce", amount: "500g" },
+    { name: "Cheese", amount: "100g" },
+    { name: "Fresh herbs", amount: "to serve" },
+  ],
+  tasks,
+  assumptions: ["Sample data used when no recipe has been extracted yet."],
+  uncertainties: [],
+};
 
 const laneStyles: Record<Lane, string> = {
   Prep: "bg-[#2f6f4e] text-white",
@@ -143,19 +193,50 @@ const laneLegend = [
   { label: "Serve", className: laneStyles.Serve },
 ];
 
-const activeTasks = tasks.filter(
-  (task) =>
-    task.startMinute <= currentMinute &&
-    currentMinute < task.startMinute + task.durationMinutes,
-);
-const upcomingTasks = tasks
-  .filter((task) => task.startMinute >= currentMinute)
-  .sort(
-    (a, b) =>
-      a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
+function getActiveTasks(recipeTasks: TimelineTask[]) {
+  return recipeTasks.filter(
+    (task) =>
+      task.startMinute <= currentMinute &&
+      currentMinute < task.startMinute + task.durationMinutes,
   );
-const nextTask = upcomingTasks[0];
-const laterTasks = upcomingTasks.slice(1);
+}
+
+function getUpcomingTasks(recipeTasks: TimelineTask[]) {
+  return recipeTasks
+    .filter((task) => task.startMinute >= currentMinute)
+    .sort(
+      (a, b) =>
+        a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
+    );
+}
+
+function normalizeExtractedRecipe(recipe: RecipeData): RecipeData {
+  const normalizedTasks: TimelineTask[] = (recipe.tasks ?? []).map((task, index) => ({
+    ...task,
+    id: task.id || index + 1,
+    startMinute: Math.max(0, Math.round(task.startMinute ?? 0)),
+    durationMinutes: Math.max(1, Math.round(task.durationMinutes ?? 1)),
+    shortLabel: task.shortLabel || task.instruction || `Task ${index + 1}`,
+    instruction: task.instruction || task.shortLabel || `Task ${index + 1}`,
+    workMode: task.workMode === "Passive" ? "Passive" : "Active",
+    track: typeof task.track === "number" ? task.track : null,
+  }));
+
+  return {
+    ...recipe,
+    title: recipe.title || "Extracted recipe",
+    ingredients: recipe.ingredients ?? [],
+    assumptions:
+      normalizedTasks.length > 0
+        ? (recipe.assumptions ?? [])
+        : [
+            ...(recipe.assumptions ?? []),
+            "No usable timeline tasks were returned, so the sample timeline is shown.",
+          ],
+    uncertainties: recipe.uncertainties ?? [],
+    tasks: normalizedTasks.length > 0 ? normalizedTasks : sampleRecipe.tasks,
+  };
+}
 
 function formatMinuteRange(task: TimelineTask) {
   return `${task.startMinute}-${task.startMinute + task.durationMinutes} min`;
@@ -181,10 +262,6 @@ function getTaskStatus(task: TimelineTask) {
   }
 
   return "Later";
-}
-
-function getWorkMode(task: TimelineTask) {
-  return task.lane === "Passive" ? "Passive" : "Active";
 }
 
 function getExpandedBlockLabel(task: TimelineTask) {
@@ -308,31 +385,74 @@ function ImageUploadCard({
 export default function Home() {
   const [recipeImage, setRecipeImage] = useState<UploadedImage | null>(null);
   const [dishImage, setDishImage] = useState<UploadedImage | null>(null);
-  const [extracted, setExtracted] = useState(false);
+  const [recipe, setRecipe] = useState<RecipeData | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const activeRecipe = recipe ?? sampleRecipe;
+  const activeTasks = getActiveTasks(activeRecipe.tasks);
+  const upcomingTasks = getUpcomingTasks(activeRecipe.tasks);
+  const nextTask = upcomingTasks[0];
+  const laterTasks = upcomingTasks.slice(1);
   const [selectedTaskId, setSelectedTaskId] = useState(activeTasks[0].id);
   const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const selectedTask =
-    tasks.find((task) => task.id === selectedTaskId) ?? activeTasks[0];
+    activeRecipe.tasks.find((task) => task.id === selectedTaskId) ??
+    activeTasks[0] ??
+    activeRecipe.tasks[0];
   const expandedTaskId = hoveredTaskId ?? selectedTask.id;
-  const canExtract = Boolean(recipeImage && dishImage);
+  const canExtract = Boolean(recipeImage && !extracting);
 
   function handleRecipeImageChange(image: UploadedImage | null) {
     setRecipeImage(image);
-    setExtracted(false);
+    setRecipe(null);
+    setExtractError(null);
   }
 
   function handleDishImageChange(image: UploadedImage | null) {
     setDishImage(image);
-    setExtracted(false);
   }
 
-  function handleExtractRecipe() {
+  async function handleExtractRecipe() {
     if (!canExtract) {
       return;
     }
 
-    setSelectedTaskId(activeTasks[0].id);
-    setExtracted(true);
+    setExtracting(true);
+    setExtractError(null);
+
+    try {
+      const response = await fetch("/api/extract-recipe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: recipeImage?.previewUrl }),
+      });
+      const payload = (await response.json()) as ExtractRecipeResponse;
+
+      if (!response.ok || !payload.recipe) {
+        throw new Error(
+          payload.error ??
+            "Sorry, the recipe could not be extracted. Please try another photo.",
+        );
+      }
+
+      const extractedRecipe = normalizeExtractedRecipe(payload.recipe);
+      const firstSelectedTask =
+        getActiveTasks(extractedRecipe.tasks)[0] ?? extractedRecipe.tasks[0];
+
+      setRecipe(extractedRecipe);
+      if (firstSelectedTask) {
+        setSelectedTaskId(firstSelectedTask.id);
+      }
+    } catch (error) {
+      setRecipe(null);
+      setExtractError(
+        error instanceof Error
+          ? error.message
+          : "Sorry, the recipe could not be extracted. Please try another photo.",
+      );
+    } finally {
+      setExtracting(false);
+    }
   }
 
   return (
@@ -364,8 +484,8 @@ export default function Home() {
               Upload recipe photos
             </h2>
             <p className="mt-1 max-w-2xl text-sm text-[#6d5e51]">
-              Add a recipe photo and a finished dish photo. Extraction is
-              simulated for now using the Tomato Pasta Bake sample timeline.
+              Add a recipe photo and a finished dish photo. Extraction uses
+              the recipe photo only for now; the dish photo stays preview-only.
             </p>
           </div>
 
@@ -392,9 +512,14 @@ export default function Home() {
                 Ready to extract a timeline
               </p>
               <p className="mt-1 text-sm text-[#6d5e51]">
-                No AI call happens yet. This button reveals the hardcoded
-                Tomato Pasta Bake timeline.
+                The recipe photo is sent to a local API route, which calls
+                OpenAI. Nothing is permanently stored.
               </p>
+              {extractError ? (
+                <p className="mt-2 text-sm font-medium text-[#a33b24]">
+                  {extractError}
+                </p>
+              ) : null}
             </div>
             <button
               type="button"
@@ -402,12 +527,12 @@ export default function Home() {
               disabled={!canExtract}
               className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
             >
-              Extract recipe
+              {extracting ? "Extracting..." : "Extract recipe"}
             </button>
           </div>
         </section>
 
-        {extracted ? (
+        {recipe ? (
         <section aria-labelledby="sample-timeline" className="space-y-6">
           <div>
             <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -419,12 +544,54 @@ export default function Home() {
                   Sample timeline
                 </h2>
                 <p className="mt-1 text-sm text-[#6d5e51]">
-                  Tomato Pasta Bake, 60 minutes
+                  {activeRecipe.title}
+                  {activeRecipe.servings
+                    ? `, ${activeRecipe.servings} servings`
+                    : ""}
+                  , 60 minutes
                 </p>
               </div>
               <p className="text-sm font-medium text-[#8a5a22]">
                 Current minute: {currentMinute}
               </p>
+            </div>
+
+            <div className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
+              <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                  Ingredients
+                </h3>
+                <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {activeRecipe.ingredients.map((ingredient) => (
+                    <li
+                      key={`${ingredient.amount}-${ingredient.name}`}
+                      className="rounded-md bg-[#f8efe3] px-3 py-2 text-sm text-[#3e342d]"
+                    >
+                      <span className="font-semibold">
+                        {ingredient.amount}
+                      </span>{" "}
+                      {ingredient.name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                  Extraction notes
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm text-[#6d5e51]">
+                  {[
+                    ...activeRecipe.assumptions,
+                    ...activeRecipe.uncertainties,
+                  ].map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                  {activeRecipe.assumptions.length === 0 &&
+                  activeRecipe.uncertainties.length === 0 ? (
+                    <li>No assumptions or uncertainties returned.</li>
+                  ) : null}
+                </ul>
+              </div>
             </div>
 
             <div className="mb-4 flex flex-wrap gap-2">
@@ -501,7 +668,7 @@ export default function Home() {
                           {lane}
                         </div>
                         <div className="relative my-3 rounded bg-[#f8efe3]">
-                          {tasks
+                          {activeRecipe.tasks
                             .filter((task) => task.lane === lane)
                             .map((task) => {
                               const selected = task.id === selectedTask.id;
@@ -601,7 +768,7 @@ export default function Home() {
                     Mode
                   </dt>
                   <dd className="mt-1 font-semibold">
-                    {getWorkMode(selectedTask)}
+                    {selectedTask.workMode}
                   </dd>
                 </div>
               </dl>
@@ -668,8 +835,8 @@ export default function Home() {
               Timeline preview
             </h2>
             <p className="mx-auto mt-2 max-w-xl text-sm text-[#6d5e51]">
-              Select both photos, then choose Extract recipe to simulate a
-              timeline from the hardcoded Tomato Pasta Bake data.
+              Select a recipe photo, then choose Extract recipe to create a
+              timeline. The finished dish photo is preview-only for now.
             </p>
           </section>
         )}
