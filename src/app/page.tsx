@@ -32,6 +32,7 @@ type RecipeData = {
 };
 
 type UploadedImage = {
+  id: string;
   name: string;
   previewUrl: string;
 };
@@ -61,7 +62,7 @@ const tasks: TimelineTask[] = [
     lane: "Prep",
     startMinute: 0,
     durationMinutes: 8,
-    instruction: "Chop onion, garlic, and carrot",
+    instruction: "Chop 1 onion, 2 garlic cloves, and 1 carrot",
     shortLabel: "Chop veg",
     workMode: "Active",
   },
@@ -70,7 +71,7 @@ const tasks: TimelineTask[] = [
     lane: "Hob",
     startMinute: 0,
     durationMinutes: 12,
-    instruction: "Bring salted pasta water to the boil",
+    instruction: "Bring salted water to the boil for 300g pasta",
     shortLabel: "Boil water",
     workMode: "Passive",
   },
@@ -79,7 +80,7 @@ const tasks: TimelineTask[] = [
     lane: "Hob",
     startMinute: 8,
     durationMinutes: 6,
-    instruction: "Saut\u00e9 onion and carrot",
+    instruction: "Saut\u00e9 1 chopped onion and 1 chopped carrot",
     shortLabel: "Saut\u00e9 veg",
     workMode: "Active",
     track: 1,
@@ -89,7 +90,7 @@ const tasks: TimelineTask[] = [
     lane: "Hob",
     startMinute: 14,
     durationMinutes: 1,
-    instruction: "Add garlic",
+    instruction: "Add 2 chopped garlic cloves",
     shortLabel: "Garlic",
     workMode: "Active",
     track: 1,
@@ -99,7 +100,7 @@ const tasks: TimelineTask[] = [
     lane: "Hob",
     startMinute: 15,
     durationMinutes: 18,
-    instruction: "Simmer tomato sauce",
+    instruction: "Simmer 500g tomato sauce",
     shortLabel: "Simmer sauce",
     workMode: "Passive",
   },
@@ -108,7 +109,7 @@ const tasks: TimelineTask[] = [
     lane: "Hob",
     startMinute: 20,
     durationMinutes: 10,
-    instruction: "Cook pasta",
+    instruction: "Cook 300g pasta",
     shortLabel: "Cook pasta",
     workMode: "Active",
     track: 1,
@@ -118,7 +119,7 @@ const tasks: TimelineTask[] = [
     lane: "Prep",
     startMinute: 30,
     durationMinutes: 5,
-    instruction: "Drain pasta and mix with sauce",
+    instruction: "Drain 300g pasta and mix with 500g tomato sauce",
     shortLabel: "Mix pasta",
     workMode: "Active",
   },
@@ -127,7 +128,7 @@ const tasks: TimelineTask[] = [
     lane: "Prep",
     startMinute: 35,
     durationMinutes: 3,
-    instruction: "Transfer to baking dish and add cheese",
+    instruction: "Transfer pasta to baking dish and add 100g cheese",
     shortLabel: "Add cheese",
     workMode: "Active",
   },
@@ -136,7 +137,7 @@ const tasks: TimelineTask[] = [
     lane: "Oven",
     startMinute: 38,
     durationMinutes: 15,
-    instruction: "Bake pasta",
+    instruction: "Bake pasta with 100g cheese",
     shortLabel: "Bake",
     workMode: "Passive",
   },
@@ -154,7 +155,7 @@ const tasks: TimelineTask[] = [
     lane: "Serve",
     startMinute: 58,
     durationMinutes: 2,
-    instruction: "Add herbs and serve",
+    instruction: "Add fresh herbs to serve",
     shortLabel: "Serve",
     workMode: "Active",
   },
@@ -210,6 +211,15 @@ function getUpcomingTasks(recipeTasks: TimelineTask[]) {
     );
 }
 
+function getCompletedTasks(recipeTasks: TimelineTask[]) {
+  return recipeTasks
+    .filter((task) => currentMinute >= task.startMinute + task.durationMinutes)
+    .sort(
+      (a, b) =>
+        a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
+    );
+}
+
 function normalizeExtractedRecipe(recipe: RecipeData): RecipeData {
   const normalizedTasks: TimelineTask[] = (recipe.tasks ?? []).map((task, index) => ({
     ...task,
@@ -248,6 +258,38 @@ function getTaskWidth(task: TimelineTask) {
 
 function getTaskLeft(task: TimelineTask) {
   return `${(task.startMinute / totalMinutes) * 100}%`;
+}
+
+function getLanePositionedTasks(recipeTasks: TimelineTask[], lane: Lane) {
+  const trackEnds: number[] = [];
+
+  return recipeTasks
+    .filter((task) => task.lane === lane)
+    .sort(
+      (a, b) =>
+        a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
+    )
+    .map((task) => {
+      const availableTrack = trackEnds.findIndex(
+        (endMinute) => task.startMinute >= endMinute + 1,
+      );
+      const visualTrack =
+        typeof task.track === "number" && task.track >= 0
+          ? task.track
+          : availableTrack === -1
+            ? trackEnds.length
+            : availableTrack;
+
+      trackEnds[visualTrack] = task.startMinute + task.durationMinutes;
+
+      return { ...task, visualTrack };
+    });
+}
+
+function getLaneHeight(laneTasks: Array<TimelineTask & { visualTrack: number }>) {
+  const maxTrack = Math.max(0, ...laneTasks.map((task) => task.visualTrack));
+
+  return `${4.75 + maxTrack * 2.75}rem`;
 }
 
 function getTaskStatus(task: TimelineTask) {
@@ -302,6 +344,186 @@ function TaskSummary({
   );
 }
 
+function readImageFiles(files: File[]) {
+  return Promise.all(
+    files.map(
+      (file) =>
+        new Promise<UploadedImage>((resolve, reject) => {
+          const reader = new FileReader();
+
+          reader.onload = () => {
+            if (typeof reader.result === "string") {
+              resolve({
+                id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
+                name: file.name,
+                previewUrl: reader.result,
+              });
+              return;
+            }
+
+            reject(new Error("Image could not be read."));
+          };
+
+          reader.onerror = () => reject(new Error("Image could not be read."));
+          reader.readAsDataURL(file);
+        }),
+    ),
+  );
+}
+
+function MultiImageUploadCard({
+  id,
+  title,
+  description,
+  images,
+  onImagesAdd,
+  onImageRemove,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  images: UploadedImage[];
+  onImagesAdd: (images: UploadedImage[]) => void;
+  onImageRemove: (imageId: string) => void;
+}) {
+  const [pasteError, setPasteError] = useState<string | null>(null);
+
+  async function handleChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+
+    if (files.length === 0) {
+      return;
+    }
+
+    onImagesAdd(await readImageFiles(files));
+    event.target.value = "";
+  }
+
+  async function handlePasteFromClipboard() {
+    setPasteError(null);
+
+    if (!navigator.clipboard?.read) {
+      setPasteError("Clipboard image paste is not available in this browser.");
+      return;
+    }
+
+    try {
+      const items = await navigator.clipboard.read();
+      const files: File[] = [];
+
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+
+        if (!imageType) {
+          continue;
+        }
+
+        const blob = await item.getType(imageType);
+        files.push(
+          new File([blob], `Pasted recipe image ${images.length + files.length + 1}`, {
+            type: imageType,
+          }),
+        );
+      }
+
+      if (files.length === 0) {
+        setPasteError("No image was found on the clipboard.");
+        return;
+      }
+
+      onImagesAdd(await readImageFiles(files));
+    } catch {
+      setPasteError("MiseMap could not read an image from the clipboard.");
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+      <div className="flex min-h-full flex-col gap-4">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+          <p className="mt-1 text-sm text-[#6d5e51]">{description}</p>
+        </div>
+
+        <label
+          htmlFor={id}
+          className="flex min-h-48 cursor-pointer items-center justify-center rounded-md border border-dashed border-[#cbb79d] bg-[#fffaf3] text-center transition hover:border-[#8a5a22]"
+        >
+          <span className="px-6 text-sm font-medium text-[#6d5e51]">
+            Select one or more images
+          </span>
+        </label>
+
+        <input
+          id={id}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleChange}
+          className="sr-only"
+        />
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label
+            htmlFor={id}
+            className="cursor-pointer rounded-md border border-[#ddcdb9] px-3 py-2 text-sm font-semibold text-[#3e342d] transition hover:border-[#8a5a22]"
+          >
+            Choose files
+          </label>
+          <button
+            type="button"
+            onClick={handlePasteFromClipboard}
+            className="rounded-md border border-[#ddcdb9] px-3 py-2 text-sm font-semibold text-[#3e342d] transition hover:border-[#8a5a22] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2"
+          >
+            Paste
+          </button>
+          <p className="text-sm text-[#6d5e51]">
+            {images.length === 0
+              ? "No recipe images added"
+              : `${images.length} recipe image${images.length === 1 ? "" : "s"} added`}
+          </p>
+        </div>
+
+        {pasteError ? (
+          <p className="text-sm font-medium text-[#a33b24]">{pasteError}</p>
+        ) : null}
+
+        {images.length > 0 ? (
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {images.map((image) => (
+              <li
+                key={image.id}
+                className="overflow-hidden rounded-md border border-[#ddcdb9] bg-[#fffaf3]"
+              >
+                <span
+                  role="img"
+                  aria-label={`${image.name} preview`}
+                  className="block h-36 w-full bg-cover bg-center"
+                  style={{ backgroundImage: `url(${image.previewUrl})` }}
+                />
+                <div className="flex items-center justify-between gap-3 px-3 py-2">
+                  <p className="min-w-0 truncate text-sm text-[#6d5e51]">
+                    {image.name}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onImageRemove(image.id)}
+                    className="shrink-0 rounded-md border border-[#ddcdb9] px-2 py-1 text-xs font-semibold text-[#3e342d] transition hover:border-[#8a5a22] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ImageUploadCard({
   id,
   title,
@@ -326,7 +548,11 @@ function ImageUploadCard({
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") {
-        onImageChange({ name: file.name, previewUrl: reader.result });
+        onImageChange({
+          id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
+          name: file.name,
+          previewUrl: reader.result,
+        });
       }
     };
     reader.readAsDataURL(file);
@@ -383,12 +609,18 @@ function ImageUploadCard({
 }
 
 export default function Home() {
-  const [recipeImage, setRecipeImage] = useState<UploadedImage | null>(null);
+  const [recipeImages, setRecipeImages] = useState<UploadedImage[]>([]);
   const [dishImage, setDishImage] = useState<UploadedImage | null>(null);
+  const [recipeUrl, setRecipeUrl] = useState("");
   const [recipe, setRecipe] = useState<RecipeData | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const activeRecipe = recipe ?? sampleRecipe;
+  const allTasks = [...activeRecipe.tasks].sort(
+    (a, b) =>
+      a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
+  );
+  const completedTasks = getCompletedTasks(activeRecipe.tasks);
   const activeTasks = getActiveTasks(activeRecipe.tasks);
   const upcomingTasks = getUpcomingTasks(activeRecipe.tasks);
   const nextTask = upcomingTasks[0];
@@ -399,11 +631,20 @@ export default function Home() {
     activeRecipe.tasks.find((task) => task.id === selectedTaskId) ??
     activeTasks[0] ??
     activeRecipe.tasks[0];
-  const expandedTaskId = hoveredTaskId ?? selectedTask.id;
-  const canExtract = Boolean(recipeImage && !extracting);
+  const expandedTaskId = hoveredTaskId;
+  const canExtractPhoto = recipeImages.length > 0 && !extracting;
+  const canExtractLink = Boolean(recipeUrl.trim() && !extracting);
 
-  function handleRecipeImageChange(image: UploadedImage | null) {
-    setRecipeImage(image);
+  function handleRecipeImagesAdd(images: UploadedImage[]) {
+    setRecipeImages((currentImages) => [...currentImages, ...images]);
+    setRecipe(null);
+    setExtractError(null);
+  }
+
+  function handleRecipeImageRemove(imageId: string) {
+    setRecipeImages((currentImages) =>
+      currentImages.filter((image) => image.id !== imageId),
+    );
     setRecipe(null);
     setExtractError(null);
   }
@@ -413,7 +654,7 @@ export default function Home() {
   }
 
   async function handleExtractRecipe() {
-    if (!canExtract) {
+    if (!canExtractPhoto) {
       return;
     }
 
@@ -424,7 +665,9 @@ export default function Home() {
       const response = await fetch("/api/extract-recipe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: recipeImage?.previewUrl }),
+        body: JSON.stringify({
+          images: recipeImages.map((image) => image.previewUrl),
+        }),
       });
       const payload = (await response.json()) as ExtractRecipeResponse;
 
@@ -449,6 +692,49 @@ export default function Home() {
         error instanceof Error
           ? error.message
           : "Sorry, the recipe could not be extracted. Please try another photo.",
+      );
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  async function handleExtractRecipeLink() {
+    if (!canExtractLink) {
+      return;
+    }
+
+    setExtracting(true);
+    setExtractError(null);
+
+    try {
+      const response = await fetch("/api/extract-recipe-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: recipeUrl.trim() }),
+      });
+      const payload = (await response.json()) as ExtractRecipeResponse;
+
+      if (!response.ok || !payload.recipe) {
+        throw new Error(
+          payload.error ??
+            "Sorry, that recipe link could not be imported. Please try another link.",
+        );
+      }
+
+      const extractedRecipe = normalizeExtractedRecipe(payload.recipe);
+      const firstSelectedTask =
+        getActiveTasks(extractedRecipe.tasks)[0] ?? extractedRecipe.tasks[0];
+
+      setRecipe(extractedRecipe);
+      if (firstSelectedTask) {
+        setSelectedTaskId(firstSelectedTask.id);
+      }
+    } catch (error) {
+      setRecipe(null);
+      setExtractError(
+        error instanceof Error
+          ? error.message
+          : "Sorry, that recipe link could not be imported. Please try another link.",
       );
     } finally {
       setExtracting(false);
@@ -481,21 +767,22 @@ export default function Home() {
               id="upload-recipe"
               className="text-2xl font-semibold tracking-tight"
             >
-              Upload recipe photos
+              Add recipe source
             </h2>
             <p className="mt-1 max-w-2xl text-sm text-[#6d5e51]">
-              Add a recipe photo and a finished dish photo. Extraction uses
-              the recipe photo only for now; the dish photo stays preview-only.
+              Upload a recipe photo or paste a recipe link. The finished dish
+              photo stays preview-only for now.
             </p>
           </div>
 
           <div className="grid gap-5 lg:grid-cols-2">
-            <ImageUploadCard
+            <MultiImageUploadCard
               id="recipe-photo"
               title="Recipe / instructions / ingredients"
-              description="Photo of the written recipe, ingredients, or cooking instructions."
-              image={recipeImage}
-              onImageChange={handleRecipeImageChange}
+              description="Add one or more photos or pasted screengrabs of the written recipe, ingredients, or cooking instructions."
+              images={recipeImages}
+              onImagesAdd={handleRecipeImagesAdd}
+              onImageRemove={handleRecipeImageRemove}
             />
             <ImageUploadCard
               id="dish-photo"
@@ -509,7 +796,7 @@ export default function Home() {
           <div className="flex flex-col gap-3 rounded-lg border border-[#ddcdb9] bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="font-semibold text-[#211b16]">
-                Ready to extract a timeline
+                Extract from photo
               </p>
               <p className="mt-1 text-sm text-[#6d5e51]">
                 The recipe photo is sent to a local API route, which calls
@@ -524,11 +811,47 @@ export default function Home() {
             <button
               type="button"
               onClick={handleExtractRecipe}
-              disabled={!canExtract}
+              disabled={!canExtractPhoto}
               className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
             >
-              {extracting ? "Extracting..." : "Extract recipe"}
+              {extracting ? "Extracting..." : "Extract from photo"}
             </button>
+          </div>
+
+          <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+              <div className="min-w-0 flex-1">
+                <label
+                  htmlFor="recipe-url"
+                  className="font-semibold text-[#211b16]"
+                >
+                  Import from recipe link
+                </label>
+                <p className="mt-1 text-sm text-[#6d5e51]">
+                  MiseMap reads the page server-side, keeps the likely recipe
+                  card text, then asks OpenAI to create the same timeline data.
+                </p>
+                <input
+                  id="recipe-url"
+                  type="url"
+                  value={recipeUrl}
+                  onChange={(event) => {
+                    setRecipeUrl(event.target.value);
+                    setExtractError(null);
+                  }}
+                  placeholder="https://example.com/recipe"
+                  className="mt-3 h-12 w-full rounded-md border border-[#ddcdb9] bg-[#fffaf3] px-3 text-sm text-[#211b16] outline-none transition placeholder:text-[#9a8c7f] focus:border-[#2f6f4e] focus:ring-2 focus:ring-[#2f6f4e]/20"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleExtractRecipeLink}
+                disabled={!canExtractLink}
+                className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
+              >
+                {extracting ? "Importing..." : "Import link"}
+              </button>
+            </div>
           </div>
         </section>
 
@@ -659,18 +982,23 @@ export default function Home() {
                       </span>
                     </div>
 
-                    {lanes.map((lane) => (
-                      <div
-                        key={lane}
-                        className="grid min-h-28 grid-cols-[7.5rem_minmax(0,1fr)] border-t border-[#eee3d5]"
-                      >
-                        <div className="sticky left-0 z-50 flex items-center border-r border-[#eee3d5] bg-white pr-4 text-sm font-semibold text-[#3e342d] shadow-[8px_0_12px_-12px_rgba(33,27,22,0.8)]">
-                          {lane}
-                        </div>
-                        <div className="relative my-3 rounded bg-[#f8efe3]">
-                          {activeRecipe.tasks
-                            .filter((task) => task.lane === lane)
-                            .map((task) => {
+                    {lanes.map((lane) => {
+                      const laneTasks = getLanePositionedTasks(
+                        activeRecipe.tasks,
+                        lane,
+                      );
+
+                      return (
+                        <div
+                          key={lane}
+                          className="grid grid-cols-[7.5rem_minmax(0,1fr)] border-t border-[#eee3d5]"
+                          style={{ minHeight: getLaneHeight(laneTasks) }}
+                        >
+                          <div className="sticky left-0 z-50 flex items-center border-r border-[#eee3d5] bg-white pr-4 text-sm font-semibold text-[#3e342d] shadow-[8px_0_12px_-12px_rgba(33,27,22,0.8)]">
+                            {lane}
+                          </div>
+                          <div className="relative my-3 rounded bg-[#f8efe3]">
+                            {laneTasks.map((task) => {
                               const selected = task.id === selectedTask.id;
                               const expanded = task.id === expandedTaskId;
 
@@ -697,8 +1025,8 @@ export default function Home() {
                                   }`}
                                   style={{
                                     left: getTaskLeft(task),
-                                    top: `${0.5 + (task.track ?? 0) * 2.5}rem`,
-                                    width: getTaskWidth(task),
+                                    top: `${0.5 + task.visualTrack * 2.75}rem`,
+                                    width: `calc(${getTaskWidth(task)} - 0.25rem)`,
                                   }}
                                   title={`${task.id}. ${task.instruction}`}
                                 >
@@ -716,9 +1044,10 @@ export default function Home() {
                                 </button>
                               );
                             })}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -778,20 +1107,48 @@ export default function Home() {
               <h2 className="text-xl font-semibold tracking-tight">
                 Now / Next / Later
               </h2>
+              <p className="mt-1 text-sm text-[#6d5e51]">
+                Showing all {allTasks.length} extracted steps for prototype
+                review.
+              </p>
               <div className="mt-5 space-y-5">
+                {completedTasks.length > 0 ? (
+                  <section>
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                      Completed
+                    </h3>
+                    <ul className="mt-2 space-y-2">
+                      {completedTasks.map((task) => (
+                        <TaskSummary
+                          key={`completed-${task.id}`}
+                          task={task}
+                          selected={task.id === selectedTask.id}
+                          onSelect={setSelectedTaskId}
+                        />
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+
                 <section>
                   <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
                     Now
                   </h3>
                   <ul className="mt-2 space-y-2">
-                    {activeTasks.map((task) => (
-                      <TaskSummary
-                        key={`now-${task.id}`}
-                        task={task}
-                        selected={task.id === selectedTask.id}
-                        onSelect={setSelectedTaskId}
-                      />
-                    ))}
+                    {activeTasks.length > 0 ? (
+                      activeTasks.map((task) => (
+                        <TaskSummary
+                          key={`now-${task.id}`}
+                          task={task}
+                          selected={task.id === selectedTask.id}
+                          onSelect={setSelectedTaskId}
+                        />
+                      ))
+                    ) : (
+                      <li className="rounded-md border border-[#ddcdb9] bg-white px-3 py-2 text-sm text-[#6d5e51]">
+                        No active task at minute {currentMinute}.
+                      </li>
+                    )}
                   </ul>
                 </section>
 
@@ -835,7 +1192,7 @@ export default function Home() {
               Timeline preview
             </h2>
             <p className="mx-auto mt-2 max-w-xl text-sm text-[#6d5e51]">
-              Select a recipe photo, then choose Extract recipe to create a
+              Select a recipe photo or paste a recipe link to create a
               timeline. The finished dish photo is preview-only for now.
             </p>
           </section>

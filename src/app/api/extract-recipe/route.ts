@@ -1,64 +1,9 @@
 import { NextResponse } from "next/server";
 
-const allowedLanes = ["Prep", "Hob", "Oven", "Passive", "Serve"] as const;
-
-const recipeSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "title",
-    "servings",
-    "ingredients",
-    "tasks",
-    "assumptions",
-    "uncertainties",
-  ],
-  properties: {
-    title: { type: "string" },
-    servings: { type: ["number", "null"] },
-    ingredients: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["name", "amount"],
-        properties: {
-          name: { type: "string" },
-          amount: { type: "string" },
-        },
-      },
-    },
-    tasks: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "id",
-          "lane",
-          "startMinute",
-          "durationMinutes",
-          "instruction",
-          "shortLabel",
-          "workMode",
-          "track",
-        ],
-        properties: {
-          id: { type: "number" },
-          lane: { type: "string", enum: allowedLanes },
-          startMinute: { type: "number" },
-          durationMinutes: { type: "number" },
-          instruction: { type: "string" },
-          shortLabel: { type: "string" },
-          workMode: { type: "string", enum: ["Active", "Passive"] },
-          track: { type: ["number", "null"] },
-        },
-      },
-    },
-    assumptions: { type: "array", items: { type: "string" } },
-    uncertainties: { type: "array", items: { type: "string" } },
-  },
-};
+import {
+  extractRecipeWithOpenAI,
+  getOpenAIOutputText,
+} from "@/lib/recipe-extraction";
 
 function friendlyError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -74,55 +19,35 @@ export async function POST(request: Request) {
     );
   }
 
-  let image: unknown;
+  let images: unknown[];
 
   try {
-    const body = (await request.json()) as { image?: unknown };
-    image = body.image;
+    const body = (await request.json()) as {
+      image?: unknown;
+      images?: unknown;
+    };
+    images = Array.isArray(body.images) ? body.images : [body.image];
   } catch {
-    return friendlyError("The recipe image could not be read. Please try again.");
+    return friendlyError("The recipe images could not be read. Please try again.");
   }
 
-  if (typeof image !== "string" || !image.startsWith("data:image/")) {
-    return friendlyError("Please upload a valid recipe image.");
+  const validImages = images.filter(
+    (image): image is string =>
+      typeof image === "string" && image.startsWith("data:image/"),
+  );
+
+  if (validImages.length === 0) {
+    return friendlyError("Please upload at least one valid recipe image.");
   }
 
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-        input: [
-          {
-            role: "system",
-            content:
-              "You extract cooking timelines from recipe photos. Return only structured data matching the schema. Include ingredient amounts in task instructions where useful. Estimate missing timings conservatively and list assumptions or uncertainties.",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "Extract this recipe into a MiseMap cooking timeline. Use lanes Prep, Hob, Oven, Passive, or Serve. Include recipe title, servings, ingredients with amounts, ordered tasks, estimated durations, active/passive status, startMinute and durationMinutes where possible, plus assumptions and uncertainties.",
-              },
-              { type: "input_image", image_url: image },
-            ],
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "recipe_timeline_extraction",
-            strict: true,
-            schema: recipeSchema,
-          },
-        },
-      }),
+    const response = await extractRecipeWithOpenAI({
+      apiKey,
+      sourceDescription: "the uploaded recipe photos",
+      userContent: validImages.map((image) => ({
+        type: "input_image",
+        image_url: image,
+      })),
     });
 
     if (!response.ok) {
@@ -131,20 +56,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const data = (await response.json()) as {
-      output_text?: string;
-      output?: Array<{
-        content?: Array<{
-          type?: string;
-          text?: string;
-        }>;
-      }>;
-    };
-    const outputText =
-      data.output_text ??
-      data.output
-        ?.flatMap((item) => item.content ?? [])
-        .find((item) => item.type === "output_text" && item.text)?.text;
+    const outputText = getOpenAIOutputText(response.data);
 
     if (!outputText) {
       return friendlyError(
