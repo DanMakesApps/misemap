@@ -82,6 +82,7 @@ export function getRecipeTimelinePrompt(sourceDescription: string) {
     "Include recipe title, servings, ingredients with amounts, ordered tasks, estimated durations, active/passive status, startMinute and durationMinutes where possible, plus assumptions and uncertainties.",
     "Put ingredient amounts directly into each full task instruction whenever the amount is visible or can be safely inferred from the ingredient list.",
     "If a later instruction uses a prepared ingredient that has not been prepared yet, add an earlier Prep task for it. For example, if serving uses 'thinly sliced spring onion', add a task such as 'Thinly slice 1 spring onion' before the garnish task, ideally during a passive cooking window.",
+    "Combine similar prep actions that naturally happen together, such as chopping onion, garlic, carrots, celery, and peppers, unless the recipe clearly needs one ingredient prepared later or differently.",
     "Keep the timeline practical: split meaningful prerequisite prep, but merge tiny actions when they happen immediately together and do not affect readiness.",
   ].join(" ");
 }
@@ -93,6 +94,7 @@ function getSystemPrompt() {
     "Return only structured data matching the schema.",
     "Full task instructions must include visible ingredient amounts where possible, such as 'Chop 1 onion' rather than 'Chop onion'.",
     "Decompose compound instructions into prerequisite prep tasks when an ingredient is first described as prepared at the point of use, such as chopped, sliced, grated, toasted, peeled, drained, washed, or cooked.",
+    "Group similar same-lane prep tasks when they use the same workflow and timing, especially chopping or slicing several vegetables before cooking begins.",
     "Schedule small prerequisite prep tasks during passive windows where possible, for example while something bakes, simmers, rests, boils, marinates, or preheats.",
     "Do not hide required prep inside a final garnish or serving step if the ingredient needs slicing, chopping, grating, or similar preparation first.",
     "Classify lanes by equipment and action: Prep is for chopping, slicing, mixing, coating, brushing, transferring, draining, assembling, and adding toppings before cooking. Hob is only for stovetop work using a hob, burner, saucepan, frying pan, skillet, or pot. Oven is for baking, roasting, grilling, broiling, or preheating. Serve is only for final plating, garnishing, and serving. Passive is for waiting or resting when no specific equipment lane is more useful.",

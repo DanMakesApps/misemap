@@ -1,7 +1,7 @@
 "use client";
 
-import type { ChangeEvent } from "react";
-import { useState } from "react";
+import type { ChangeEvent, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Lane = "Prep" | "Hob" | "Oven" | "Passive" | "Serve";
 type WorkMode = "Active" | "Passive";
@@ -42,10 +42,8 @@ type ExtractRecipeResponse = {
   error?: string;
 };
 
-const currentMinute = 18;
-const totalMinutes = 60;
+const initialElapsedSeconds = 0;
 const lanes: Lane[] = ["Prep", "Hob", "Oven", "Passive", "Serve"];
-const minuteMarkers = [0, 15, 30, 45, 60];
 
 const tasks: TimelineTask[] = [
   {
@@ -186,7 +184,7 @@ const laneStyles: Record<Lane, string> = {
   Serve: "bg-[#1f6f8b] text-white",
 };
 
-const laneLegend = [
+const laneLegend: Array<{ label: Lane; className: string }> = [
   { label: "Prep", className: laneStyles.Prep },
   { label: "Hob", className: laneStyles.Hob },
   { label: "Oven", className: laneStyles.Oven },
@@ -194,30 +192,12 @@ const laneLegend = [
   { label: "Serve", className: laneStyles.Serve },
 ];
 
-function getActiveTasks(recipeTasks: TimelineTask[]) {
+function getActiveTasks(recipeTasks: TimelineTask[], currentMinute: number) {
   return recipeTasks.filter(
     (task) =>
       task.startMinute <= currentMinute &&
       currentMinute < task.startMinute + task.durationMinutes,
   );
-}
-
-function getUpcomingTasks(recipeTasks: TimelineTask[]) {
-  return recipeTasks
-    .filter((task) => task.startMinute >= currentMinute)
-    .sort(
-      (a, b) =>
-        a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
-    );
-}
-
-function getCompletedTasks(recipeTasks: TimelineTask[]) {
-  return recipeTasks
-    .filter((task) => currentMinute >= task.startMinute + task.durationMinutes)
-    .sort(
-      (a, b) =>
-        a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
-    );
 }
 
 function normalizeExtractedRecipe(recipe: RecipeData): RecipeData {
@@ -252,12 +232,67 @@ function formatMinuteRange(task: TimelineTask) {
   return `${task.startMinute}-${task.startMinute + task.durationMinutes} min`;
 }
 
-function getTaskWidth(task: TimelineTask) {
+function formatDuration(task: TimelineTask) {
+  return `${task.durationMinutes} min${task.durationMinutes === 1 ? "" : "s"}`;
+}
+
+function getRecipeDuration(recipeTasks: TimelineTask[]) {
+  const recipeEndMinute = Math.max(
+    0,
+    ...recipeTasks.map((task) => task.startMinute + task.durationMinutes),
+  );
+
+  return Math.max(1, recipeEndMinute);
+}
+
+function getMinuteMarkers(totalMinutes: number) {
+  const markerCount = Math.floor(totalMinutes / 15);
+
+  const markers = Array.from(
+    { length: markerCount + 1 },
+    (_, index) => index * 15,
+  );
+
+  if (markers[markers.length - 1] !== totalMinutes) {
+    markers.push(totalMinutes);
+  }
+
+  return markers;
+}
+
+function formatTimer(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+function getTaskWidth(task: TimelineTask, totalMinutes: number) {
   return `${(task.durationMinutes / totalMinutes) * 100}%`;
 }
 
-function getTaskLeft(task: TimelineTask) {
+function getTaskLeft(task: TimelineTask, totalMinutes: number) {
   return `${(task.startMinute / totalMinutes) * 100}%`;
+}
+
+function getTaskRight(task: TimelineTask, totalMinutes: number) {
+  return `${100 - ((task.startMinute + task.durationMinutes) / totalMinutes) * 100}%`;
+}
+
+function shouldAnchorTaskToRight(task: TimelineTask, totalMinutes: number) {
+  return task.startMinute + task.durationMinutes > totalMinutes * 0.88;
+}
+
+function getEdgeAwareTransform(minute: number, totalMinutes: number) {
+  if (minute <= totalMinutes * 0.02) {
+    return "translateX(0)";
+  }
+
+  if (minute >= totalMinutes * 0.98) {
+    return "translateX(-100%)";
+  }
+
+  return "translateX(-50%)";
 }
 
 function getLanePositionedTasks(recipeTasks: TimelineTask[], lane: Lane) {
@@ -286,14 +321,27 @@ function getLanePositionedTasks(recipeTasks: TimelineTask[], lane: Lane) {
     });
 }
 
-function getLaneHeight(laneTasks: Array<TimelineTask & { visualTrack: number }>) {
+function getLaneHeight(
+  laneTasks: Array<TimelineTask & { visualTrack: number }>,
+  compact = false,
+) {
   const maxTrack = Math.max(0, ...laneTasks.map((task) => task.visualTrack));
 
-  return `${4.75 + maxTrack * 2.75}rem`;
+  return compact
+    ? `${3.1 + maxTrack * 2.1}rem`
+    : `${4.75 + maxTrack * 2.75}rem`;
 }
 
-function getTaskStatus(task: TimelineTask) {
+function getTaskStatus(
+  task: TimelineTask,
+  currentMinute: number,
+  completedTaskIds: Set<number>,
+) {
   const endMinute = task.startMinute + task.durationMinutes;
+
+  if (completedTaskIds.has(task.id)) {
+    return "Done";
+  }
 
   if (task.startMinute <= currentMinute && currentMinute < endMinute) {
     return "Active now";
@@ -310,13 +358,172 @@ function getExpandedBlockLabel(task: TimelineTask) {
   return `${task.id} ${task.shortLabel}`;
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getIngredientHighlightTerms(ingredients: Ingredient[]) {
+  const terms = new Set<string>();
+  const stopWords = new Set([
+    "and",
+    "or",
+    "the",
+    "with",
+    "their",
+    "for",
+    "each",
+    "plus",
+    "more",
+    "to",
+  ]);
+
+  ingredients.forEach((ingredient) => {
+    [ingredient.amount, ingredient.name].forEach((value) => {
+      const trimmedValue = value.trim();
+
+      if (trimmedValue.length >= 2) {
+        terms.add(trimmedValue);
+      }
+
+      trimmedValue
+        .split(/\s+/)
+        .map((part) => part.replace(/^[,.;:()]+|[,.;:()]+$/g, ""))
+        .filter(
+          (part) =>
+            (part.length >= 3 || /\d/.test(part)) &&
+            !stopWords.has(part.toLowerCase()),
+        )
+        .forEach((part) => terms.add(part));
+    });
+  });
+
+  return Array.from(terms).sort((a, b) => b.length - a.length);
+}
+
+function highlightIngredients(
+  text: string,
+  ingredients: Ingredient[],
+): ReactNode {
+  const terms = getIngredientHighlightTerms(ingredients);
+
+  if (terms.length === 0) {
+    return text;
+  }
+
+  const pattern = new RegExp(
+    `(^|[^A-Za-z0-9])(${terms.map(escapeRegExp).join("|")})(?=$|[^A-Za-z0-9])`,
+    "gi",
+  );
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+
+  Array.from(text.matchAll(pattern)).forEach((match, index) => {
+    const matchedText = match[0];
+    const prefix = match[1] ?? "";
+    const term = match[2] ?? "";
+    const matchStart = match.index ?? 0;
+    const termStart = matchStart + prefix.length;
+
+    if (matchStart > lastIndex) {
+      nodes.push(text.slice(lastIndex, matchStart));
+    }
+
+    if (prefix) {
+      nodes.push(prefix);
+    }
+
+    nodes.push(
+      <strong key={`${term}-${index}`} className="font-semibold">
+        {term}
+      </strong>,
+    );
+
+    lastIndex = matchStart + matchedText.length;
+    if (lastIndex < termStart + term.length) {
+      lastIndex = termStart + term.length;
+    }
+  });
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes.length > 0 ? nodes : text;
+}
+
+function LaneIcon({ lane }: { lane: Lane }) {
+  const commonProps = {
+    className: "h-4 w-4",
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 2,
+    viewBox: "0 0 24 24",
+  };
+
+  if (lane === "Prep") {
+    return (
+      <svg aria-hidden="true" {...commonProps}>
+        <path d="M14 4l6 6" />
+        <path d="M3 21l8.5-8.5" />
+        <path d="M13 5l6 6-2 2-6-6z" />
+      </svg>
+    );
+  }
+
+  if (lane === "Hob") {
+    return (
+      <svg aria-hidden="true" {...commonProps}>
+        <path d="M6 10h12l-1 8H7z" />
+        <path d="M8 10V8a4 4 0 018 0v2" />
+        <path d="M4 18h16" />
+      </svg>
+    );
+  }
+
+  if (lane === "Oven") {
+    return (
+      <svg aria-hidden="true" {...commonProps}>
+        <path d="M12 21c3 0 5-2 5-5 0-2.5-1.5-4-3-5.5-.8 2-2.4 2.9-3.8 4.2A3.8 3.8 0 0012 21z" />
+        <path d="M12 3c1 2.5-.8 4.1-2.2 5.6C8.6 9.9 8 11 8 12.5" />
+      </svg>
+    );
+  }
+
+  if (lane === "Passive") {
+    return (
+      <svg aria-hidden="true" {...commonProps}>
+        <circle cx="12" cy="13" r="7" />
+        <path d="M12 13V9" />
+        <path d="M12 13l3 2" />
+        <path d="M9 2h6" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" {...commonProps}>
+      <circle cx="12" cy="10" r="4" />
+      <path d="M4 20h16" />
+      <path d="M7 20a5 5 0 0110 0" />
+      <path d="M5 5v8" />
+      <path d="M19 5v8" />
+    </svg>
+  );
+}
+
 function TaskSummary({
   task,
   selected,
+  completed,
+  statusLabel,
   onSelect,
 }: {
   task: TimelineTask;
   selected: boolean;
+  completed: boolean;
+  statusLabel: string;
   onSelect: (taskId: number) => void;
 }) {
   return (
@@ -334,13 +541,77 @@ function TaskSummary({
           <span className="text-sm font-semibold text-[#211b16]">
             {task.id}. {task.shortLabel}
           </span>
-          <span className="shrink-0 text-xs font-medium text-[#8a5a22]">
-            {formatMinuteRange(task)}
+          <span className="shrink-0 text-right">
+            <span className="block text-xs font-medium text-[#8a5a22]">
+              {formatMinuteRange(task)}
+            </span>
+            <span className="mt-0.5 block text-xs font-semibold text-[#2f6f4e]">
+              {formatDuration(task)}
+            </span>
           </span>
         </div>
-        <p className="mt-1 text-xs text-[#6d5e51]">{task.lane}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="inline-flex items-center gap-1 text-[#6d5e51]">
+            <LaneIcon lane={task.lane} />
+            {task.lane}
+          </span>
+          <span
+            className={`rounded px-2 py-0.5 font-semibold ${
+              completed
+                ? "bg-[#eef7f0] text-[#2f6f4e]"
+                : statusLabel === "Active now"
+                  ? "bg-[#211b16] text-white"
+                  : "bg-[#f8efe3] text-[#8a5a22]"
+            }`}
+          >
+            {statusLabel}
+          </span>
+        </div>
       </button>
     </li>
+  );
+}
+
+function IngredientsPanel({
+  ingredients,
+  className = "",
+  scrollable = false,
+}: {
+  ingredients: Ingredient[];
+  className?: string;
+  scrollable?: boolean;
+}) {
+  return (
+    <section
+      className={`rounded-lg border border-[#ddcdb9] bg-white p-5 ${
+        scrollable ? "flex min-h-0 flex-col overflow-hidden" : ""
+      } ${className}`}
+    >
+      <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+        Ingredients
+      </h3>
+      {ingredients.length > 0 ? (
+        <ul
+          className={`mt-3 grid gap-2 sm:grid-cols-2 2xl:grid-cols-1 ${
+            scrollable ? "min-h-0 flex-1 overflow-y-auto pr-1" : ""
+          }`}
+        >
+          {ingredients.map((ingredient) => (
+            <li
+              key={`${ingredient.amount}-${ingredient.name}`}
+              className="rounded-md bg-[#f8efe3] px-3 py-2 text-sm text-[#3e342d]"
+            >
+              <span className="font-semibold">{ingredient.amount}</span>{" "}
+              {ingredient.name}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-[#6d5e51]">
+          No ingredients returned.
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -609,36 +880,87 @@ function ImageUploadCard({
 }
 
 export default function Home() {
+  const cockpitRef = useRef<HTMLDivElement | null>(null);
   const [recipeImages, setRecipeImages] = useState<UploadedImage[]>([]);
   const [dishImage, setDishImage] = useState<UploadedImage | null>(null);
   const [recipeUrl, setRecipeUrl] = useState("");
   const [recipe, setRecipe] = useState<RecipeData | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
-  const activeRecipe = recipe ?? sampleRecipe;
-  const allTasks = [...activeRecipe.tasks].sort(
-    (a, b) =>
-      a.startMinute - b.startMinute || a.durationMinutes - b.durationMinutes,
+  const [elapsedSeconds, setElapsedSeconds] = useState(initialElapsedSeconds);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [completedTaskIds, setCompletedTaskIds] = useState<Set<number>>(
+    () => new Set(),
   );
-  const completedTasks = getCompletedTasks(activeRecipe.tasks);
-  const activeTasks = getActiveTasks(activeRecipe.tasks);
-  const upcomingTasks = getUpcomingTasks(activeRecipe.tasks);
-  const nextTask = upcomingTasks[0];
-  const laterTasks = upcomingTasks.slice(1);
-  const [selectedTaskId, setSelectedTaskId] = useState(activeTasks[0].id);
+  const [previousElapsedByTaskId, setPreviousElapsedByTaskId] = useState<
+    Record<number, number>
+  >({});
+  const [recipeSourceOpen, setRecipeSourceOpen] = useState(true);
+  const [isCockpitFullscreen, setIsCockpitFullscreen] = useState(false);
+  const activeRecipe = recipe ?? sampleRecipe;
+  const totalMinutes = getRecipeDuration(activeRecipe.tasks);
+  const minuteMarkers = getMinuteMarkers(totalMinutes);
+  const currentMinute = Math.min(elapsedSeconds / 60, totalMinutes);
+  const timelineWidth = Math.max(1040, totalMinutes * 18);
+  const orderedTasks = [...activeRecipe.tasks].sort((a, b) => a.id - b.id);
+  const activeTasks = getActiveTasks(activeRecipe.tasks, currentMinute).filter(
+    (task) => !completedTaskIds.has(task.id),
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState(
+    () => sampleRecipe.tasks[0].id,
+  );
   const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
   const selectedTask =
     activeRecipe.tasks.find((task) => task.id === selectedTaskId) ??
     activeTasks[0] ??
-    activeRecipe.tasks[0];
+    orderedTasks[0] ??
+    sampleRecipe.tasks[0];
   const expandedTaskId = hoveredTaskId;
   const canExtractPhoto = recipeImages.length > 0 && !extracting;
   const canExtractLink = Boolean(recipeUrl.trim() && !extracting);
+
+  useEffect(() => {
+    if (!timerRunning) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setElapsedSeconds((seconds) => {
+        const nextSeconds = seconds + 1;
+        const maxSeconds = totalMinutes * 60;
+
+        if (nextSeconds >= maxSeconds) {
+          setTimerRunning(false);
+          return maxSeconds;
+        }
+
+        return nextSeconds;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [timerRunning, totalMinutes]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      setIsCockpitFullscreen(document.fullscreenElement === cockpitRef.current);
+    }
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
 
   function handleRecipeImagesAdd(images: UploadedImage[]) {
     setRecipeImages((currentImages) => [...currentImages, ...images]);
     setRecipe(null);
     setExtractError(null);
+    setCompletedTaskIds(new Set());
+    setPreviousElapsedByTaskId({});
+    setElapsedSeconds(initialElapsedSeconds);
+    setTimerRunning(false);
   }
 
   function handleRecipeImageRemove(imageId: string) {
@@ -647,6 +969,10 @@ export default function Home() {
     );
     setRecipe(null);
     setExtractError(null);
+    setCompletedTaskIds(new Set());
+    setPreviousElapsedByTaskId({});
+    setElapsedSeconds(initialElapsedSeconds);
+    setTimerRunning(false);
   }
 
   function handleDishImageChange(image: UploadedImage | null) {
@@ -680,9 +1006,15 @@ export default function Home() {
 
       const extractedRecipe = normalizeExtractedRecipe(payload.recipe);
       const firstSelectedTask =
-        getActiveTasks(extractedRecipe.tasks)[0] ?? extractedRecipe.tasks[0];
+        getActiveTasks(extractedRecipe.tasks, initialElapsedSeconds / 60)[0] ??
+        extractedRecipe.tasks[0];
 
       setRecipe(extractedRecipe);
+      setCompletedTaskIds(new Set());
+      setPreviousElapsedByTaskId({});
+      setElapsedSeconds(initialElapsedSeconds);
+      setTimerRunning(false);
+      setRecipeSourceOpen(false);
       if (firstSelectedTask) {
         setSelectedTaskId(firstSelectedTask.id);
       }
@@ -723,9 +1055,15 @@ export default function Home() {
 
       const extractedRecipe = normalizeExtractedRecipe(payload.recipe);
       const firstSelectedTask =
-        getActiveTasks(extractedRecipe.tasks)[0] ?? extractedRecipe.tasks[0];
+        getActiveTasks(extractedRecipe.tasks, initialElapsedSeconds / 60)[0] ??
+        extractedRecipe.tasks[0];
 
       setRecipe(extractedRecipe);
+      setCompletedTaskIds(new Set());
+      setPreviousElapsedByTaskId({});
+      setElapsedSeconds(initialElapsedSeconds);
+      setTimerRunning(false);
+      setRecipeSourceOpen(false);
       if (firstSelectedTask) {
         setSelectedTaskId(firstSelectedTask.id);
       }
@@ -738,6 +1076,80 @@ export default function Home() {
       );
     } finally {
       setExtracting(false);
+    }
+  }
+
+  function handleResetTimer() {
+    setTimerRunning(false);
+    setElapsedSeconds(initialElapsedSeconds);
+    setCompletedTaskIds(new Set());
+    setPreviousElapsedByTaskId({});
+    setSelectedTaskId(orderedTasks[0]?.id ?? selectedTask.id);
+  }
+
+  function getNextStep(taskId: number) {
+    const selectedTaskIndex = orderedTasks.findIndex((task) => task.id === taskId);
+
+    return orderedTasks[selectedTaskIndex + 1] ?? null;
+  }
+
+  function handleSelectNextStep() {
+    const nextTaskToSelect = getNextStep(selectedTask.id);
+
+    if (nextTaskToSelect) {
+      setSelectedTaskId(nextTaskToSelect.id);
+    }
+  }
+
+  async function handleToggleCockpitFullscreen() {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    await cockpitRef.current?.requestFullscreen();
+  }
+
+  function handleToggleSelectedTaskDone() {
+    const taskIsDone = completedTaskIds.has(selectedTask.id);
+    const updatedCompletedTaskIds = new Set(completedTaskIds);
+
+    if (taskIsDone) {
+      const restoredTime = previousElapsedByTaskId[selectedTask.id];
+
+      updatedCompletedTaskIds.delete(selectedTask.id);
+      setCompletedTaskIds(updatedCompletedTaskIds);
+      setPreviousElapsedByTaskId((previousTimes) => {
+        const remainingTimes = { ...previousTimes };
+        delete remainingTimes[selectedTask.id];
+
+        return remainingTimes;
+      });
+      if (typeof restoredTime === "number") {
+        setElapsedSeconds(restoredTime);
+      }
+      return;
+    }
+
+    updatedCompletedTaskIds.add(selectedTask.id);
+    setCompletedTaskIds(updatedCompletedTaskIds);
+    setPreviousElapsedByTaskId((previousTimes) => ({
+      ...previousTimes,
+      [selectedTask.id]: elapsedSeconds,
+    }));
+
+    const selectedTaskIndex = orderedTasks.findIndex(
+      (task) => task.id === selectedTask.id,
+    );
+    const nextTaskToSelect =
+      orderedTasks
+        .slice(selectedTaskIndex + 1)
+        .find((task) => !updatedCompletedTaskIds.has(task.id)) ??
+      orderedTasks.find((task) => !updatedCompletedTaskIds.has(task.id));
+
+    if (nextTaskToSelect) {
+      setSelectedTaskId(nextTaskToSelect.id);
+      setElapsedSeconds(nextTaskToSelect.startMinute * 60);
     }
   }
 
@@ -762,97 +1174,131 @@ export default function Home() {
         </header>
 
         <section aria-labelledby="upload-recipe" className="space-y-5">
-          <div>
-            <h2
-              id="upload-recipe"
-              className="text-2xl font-semibold tracking-tight"
-            >
-              Add recipe source
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm text-[#6d5e51]">
-              Upload a recipe photo or paste a recipe link. The finished dish
-              photo stays preview-only for now.
-            </p>
-          </div>
-
-          <div className="grid gap-5 lg:grid-cols-2">
-            <MultiImageUploadCard
-              id="recipe-photo"
-              title="Recipe / instructions / ingredients"
-              description="Add one or more photos or pasted screengrabs of the written recipe, ingredients, or cooking instructions."
-              images={recipeImages}
-              onImagesAdd={handleRecipeImagesAdd}
-              onImageRemove={handleRecipeImageRemove}
-            />
-            <ImageUploadCard
-              id="dish-photo"
-              title="Finished dish"
-              description="Photo of the dish you are aiming to cook."
-              image={dishImage}
-              onImageChange={handleDishImageChange}
-            />
-          </div>
-
-          <div className="flex flex-col gap-3 rounded-lg border border-[#ddcdb9] bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="font-semibold text-[#211b16]">
-                Extract from photo
+              <h2
+                id="upload-recipe"
+                className="text-2xl font-semibold tracking-tight"
+              >
+                Add recipe source
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm text-[#6d5e51]">
+                Upload a recipe photo or paste a recipe link. The finished dish
+                photo stays preview-only for now.
               </p>
-              <p className="mt-1 text-sm text-[#6d5e51]">
-                The recipe photo is sent to a local API route, which calls
-                OpenAI. Nothing is permanently stored.
-              </p>
-              {extractError ? (
-                <p className="mt-2 text-sm font-medium text-[#a33b24]">
-                  {extractError}
-                </p>
-              ) : null}
             </div>
-            <button
-              type="button"
-              onClick={handleExtractRecipe}
-              disabled={!canExtractPhoto}
-              className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
-            >
-              {extracting ? "Extracting..." : "Extract from photo"}
-            </button>
-          </div>
-
-          <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
-              <div className="min-w-0 flex-1">
-                <label
-                  htmlFor="recipe-url"
-                  className="font-semibold text-[#211b16]"
-                >
-                  Import from recipe link
-                </label>
-                <p className="mt-1 text-sm text-[#6d5e51]">
-                  MiseMap reads the page server-side, keeps the likely recipe
-                  card text, then asks OpenAI to create the same timeline data.
-                </p>
-                <input
-                  id="recipe-url"
-                  type="url"
-                  value={recipeUrl}
-                  onChange={(event) => {
-                    setRecipeUrl(event.target.value);
-                    setExtractError(null);
-                  }}
-                  placeholder="https://example.com/recipe"
-                  className="mt-3 h-12 w-full rounded-md border border-[#ddcdb9] bg-[#fffaf3] px-3 text-sm text-[#211b16] outline-none transition placeholder:text-[#9a8c7f] focus:border-[#2f6f4e] focus:ring-2 focus:ring-[#2f6f4e]/20"
-                />
-              </div>
+            {recipe ? (
               <button
                 type="button"
-                onClick={handleExtractRecipeLink}
-                disabled={!canExtractLink}
-                className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
+                onClick={() => setRecipeSourceOpen((open) => !open)}
+                className="inline-flex h-10 w-fit items-center justify-center rounded-md border border-[#ddcdb9] bg-white px-4 text-sm font-semibold text-[#3e342d] transition hover:border-[#8a5a22] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2"
               >
-                {extracting ? "Importing..." : "Import link"}
+                {recipeSourceOpen ? "Hide sources" : "Show sources"}
               </button>
-            </div>
+            ) : null}
           </div>
+
+          {recipeSourceOpen ? (
+            <>
+              <div className="grid gap-5 lg:grid-cols-2">
+                <MultiImageUploadCard
+                  id="recipe-photo"
+                  title="Recipe / instructions / ingredients"
+                  description="Add one or more photos or pasted screengrabs of the written recipe, ingredients, or cooking instructions."
+                  images={recipeImages}
+                  onImagesAdd={handleRecipeImagesAdd}
+                  onImageRemove={handleRecipeImageRemove}
+                />
+                <ImageUploadCard
+                  id="dish-photo"
+                  title="Finished dish"
+                  description="Photo of the dish you are aiming to cook."
+                  image={dishImage}
+                  onImageChange={handleDishImageChange}
+                />
+              </div>
+
+              <div className="flex flex-col gap-3 rounded-lg border border-[#ddcdb9] bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-semibold text-[#211b16]">
+                    Extract from photo
+                  </p>
+                  <p className="mt-1 text-sm text-[#6d5e51]">
+                    The recipe photo is sent to a local API route, which calls
+                    OpenAI. Nothing is permanently stored.
+                  </p>
+                  {extractError ? (
+                    <p className="mt-2 text-sm font-medium text-[#a33b24]">
+                      {extractError}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExtractRecipe}
+                  disabled={!canExtractPhoto}
+                  className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
+                >
+                  {extracting ? "Extracting..." : "Extract from photo"}
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+                  <div className="min-w-0 flex-1">
+                    <label
+                      htmlFor="recipe-url"
+                      className="font-semibold text-[#211b16]"
+                    >
+                      Import from recipe link
+                    </label>
+                    <p className="mt-1 text-sm text-[#6d5e51]">
+                      MiseMap reads the page server-side, keeps the likely recipe
+                      card text, then asks OpenAI to create the same timeline data.
+                    </p>
+                    <input
+                      id="recipe-url"
+                      type="url"
+                      value={recipeUrl}
+                      onChange={(event) => {
+                        setRecipeUrl(event.target.value);
+                        setExtractError(null);
+                      }}
+                      placeholder="https://example.com/recipe"
+                      className="mt-3 h-12 w-full rounded-md border border-[#ddcdb9] bg-[#fffaf3] px-3 text-sm text-[#211b16] outline-none transition placeholder:text-[#9a8c7f] focus:border-[#2f6f4e] focus:ring-2 focus:ring-[#2f6f4e]/20"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExtractRecipeLink}
+                    disabled={!canExtractLink}
+                    className="inline-flex h-12 w-fit items-center justify-center rounded-md bg-[#2f6f4e] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:bg-[#9ca99f]"
+                  >
+                    {extracting ? "Importing..." : "Import link"}
+                  </button>
+                </div>
+              </div>
+
+              {recipe ? (
+                <details className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+                  <summary className="cursor-pointer text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                    Extraction notes
+                  </summary>
+                  <ul className="mt-3 space-y-2 text-sm text-[#6d5e51]">
+                    {[...activeRecipe.assumptions, ...activeRecipe.uncertainties].map(
+                      (note) => (
+                        <li key={note}>{note}</li>
+                      ),
+                    )}
+                    {activeRecipe.assumptions.length === 0 &&
+                    activeRecipe.uncertainties.length === 0 ? (
+                      <li>No assumptions or uncertainties returned.</li>
+                    ) : null}
+                  </ul>
+                </details>
+              ) : null}
+            </>
+          ) : null}
         </section>
 
         {recipe ? (
@@ -871,81 +1317,96 @@ export default function Home() {
                   {activeRecipe.servings
                     ? `, ${activeRecipe.servings} servings`
                     : ""}
-                  , 60 minutes
+                  , {totalMinutes} minutes
                 </p>
               </div>
-              <p className="text-sm font-medium text-[#8a5a22]">
-                Current minute: {currentMinute}
-              </p>
             </div>
 
-            <div className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
-              <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                  Ingredients
-                </h3>
-                <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {activeRecipe.ingredients.map((ingredient) => (
-                    <li
-                      key={`${ingredient.amount}-${ingredient.name}`}
-                      className="rounded-md bg-[#f8efe3] px-3 py-2 text-sm text-[#3e342d]"
-                    >
-                      <span className="font-semibold">
-                        {ingredient.amount}
-                      </span>{" "}
-                      {ingredient.name}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div className="rounded-lg border border-[#ddcdb9] bg-white p-5">
-                <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                  Extraction notes
-                </h3>
-                <ul className="mt-3 space-y-2 text-sm text-[#6d5e51]">
-                  {[
-                    ...activeRecipe.assumptions,
-                    ...activeRecipe.uncertainties,
-                  ].map((note) => (
-                    <li key={note}>{note}</li>
-                  ))}
-                  {activeRecipe.assumptions.length === 0 &&
-                  activeRecipe.uncertainties.length === 0 ? (
-                    <li>No assumptions or uncertainties returned.</li>
-                  ) : null}
-                </ul>
-              </div>
+            <div
+              ref={cockpitRef}
+              className={`${
+                isCockpitFullscreen
+                  ? "flex h-dvh flex-col gap-4 overflow-hidden bg-[#fffaf3] p-4 text-[#211b16]"
+                  : "space-y-6"
+              }`}
+            >
+            <div className={`${isCockpitFullscreen ? "hidden" : "mb-5 2xl:hidden"}`}>
+              <IngredientsPanel ingredients={activeRecipe.ingredients} />
             </div>
 
-            <div className="mb-4 flex flex-wrap gap-2">
-              {laneLegend.map((item) => (
-                <div
-                  key={item.label}
-                  className="inline-flex items-center gap-2 rounded-md border border-[#ddcdb9] bg-white px-3 py-2 text-sm font-medium text-[#3e342d]"
-                >
-                  <span
-                    className={`h-3 w-3 rounded-sm ${item.className}`}
-                    aria-hidden="true"
-                  />
-                  {item.label}
-                </div>
-              ))}
-            </div>
-
+            <div
+              className={
+                isCockpitFullscreen
+                  ? "w-full shrink-0"
+                  : "relative left-1/2 w-[calc(100vw-1rem)] -translate-x-1/2 px-6 sm:px-10 lg:px-12"
+              }
+            >
             <div className="rounded-lg border border-[#ddcdb9] bg-white">
-              <div className="border-b border-[#eadccc] px-4 py-3 text-sm text-[#6d5e51]">
-                Select a numbered task to see the full instruction.
+              <div className="flex flex-col gap-2 border-b border-[#eadccc] px-3 py-2 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-1 text-xs text-[#6d5e51]">
+                    Select a numbered task.
+                  </span>
+                  {laneLegend.map((item) => (
+                    <div
+                      key={item.label}
+                      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#ddcdb9] bg-white px-2 text-xs font-medium text-[#3e342d]"
+                    >
+                      <span
+                        className={`inline-flex h-4 w-4 items-center justify-center rounded-sm ${item.className}`}
+                      >
+                        <LaneIcon lane={item.label} />
+                      </span>
+                      {item.label}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-medium text-[#8a5a22]">
+                    Timer: {formatTimer(elapsedSeconds)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setTimerRunning((running) => !running)}
+                    className="inline-flex h-8 items-center justify-center rounded-md bg-[#2f6f4e] px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-[#285f43] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white"
+                  >
+                    {timerRunning ? "Pause" : "Start"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetTimer}
+                    className="inline-flex h-8 items-center justify-center rounded-md border border-[#ddcdb9] bg-white px-3 text-xs font-semibold text-[#3e342d] transition hover:border-[#8a5a22] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleToggleCockpitFullscreen}
+                    className="inline-flex h-8 items-center justify-center rounded-md border border-[#ddcdb9] bg-white px-3 text-xs font-semibold text-[#3e342d] transition hover:border-[#8a5a22] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 focus:ring-offset-white"
+                  >
+                    {isCockpitFullscreen ? "Exit full screen" : "Full screen"}
+                  </button>
+                </div>
               </div>
               <div className="overflow-x-auto">
-                <div className="min-w-[1120px] p-4">
+                <div
+                  className={isCockpitFullscreen ? "p-2" : "p-3"}
+                  style={{ minWidth: `${timelineWidth}px` }}
+                >
                   <div className="grid grid-cols-[7.5rem_minmax(0,1fr)]">
                     <div className="sticky left-0 z-50 border-r border-[#eee3d5] bg-white" />
-                    <div className="relative h-8 text-xs font-semibold text-[#8a5a22]">
+                    <div className="relative h-7 text-xs font-semibold text-[#8a5a22]">
                       {minuteMarkers.map((minute) => (
                         <span
                           key={minute}
-                          className="absolute top-0 -translate-x-1/2"
-                          style={{ left: `${(minute / totalMinutes) * 100}%` }}
+                          className="absolute top-0 whitespace-nowrap"
+                          style={{
+                            left: `${(minute / totalMinutes) * 100}%`,
+                            transform: getEdgeAwareTransform(
+                              minute,
+                              totalMinutes,
+                            ),
+                          }}
                         >
                           {minute} min
                         </span>
@@ -973,9 +1434,13 @@ export default function Home() {
                         }}
                       />
                       <span
-                        className="absolute -top-7 -translate-x-1/2 rounded bg-[#211b16] px-2 py-1 text-xs font-semibold text-white"
+                        className="absolute -top-7 rounded bg-[#211b16] px-2 py-1 text-xs font-semibold text-white"
                         style={{
                           left: `${(currentMinute / totalMinutes) * 100}%`,
+                          transform: getEdgeAwareTransform(
+                            currentMinute,
+                            totalMinutes,
+                          ),
                         }}
                       >
                         Now
@@ -992,15 +1457,30 @@ export default function Home() {
                         <div
                           key={lane}
                           className="grid grid-cols-[7.5rem_minmax(0,1fr)] border-t border-[#eee3d5]"
-                          style={{ minHeight: getLaneHeight(laneTasks) }}
+                          style={{
+                            minHeight: getLaneHeight(
+                              laneTasks,
+                              isCockpitFullscreen,
+                            ),
+                          }}
                         >
-                          <div className="sticky left-0 z-50 flex items-center border-r border-[#eee3d5] bg-white pr-4 text-sm font-semibold text-[#3e342d] shadow-[8px_0_12px_-12px_rgba(33,27,22,0.8)]">
+                          <div className="sticky left-0 z-50 flex items-center gap-2 border-r border-[#eee3d5] bg-white pr-4 text-sm font-semibold text-[#3e342d] shadow-[8px_0_12px_-12px_rgba(33,27,22,0.8)]">
+                            <LaneIcon lane={lane} />
                             {lane}
                           </div>
-                          <div className="relative my-3 rounded bg-[#f8efe3]">
+                          <div
+                            className={`relative rounded bg-[#f8efe3] ${
+                              isCockpitFullscreen ? "my-2" : "my-3"
+                            }`}
+                          >
                             {laneTasks.map((task) => {
                               const selected = task.id === selectedTask.id;
                               const expanded = task.id === expandedTaskId;
+                              const completed = completedTaskIds.has(task.id);
+                              const anchorToRight = shouldAnchorTaskToRight(
+                                task,
+                                totalMinutes,
+                              );
 
                               return (
                                 <button
@@ -1012,7 +1492,7 @@ export default function Home() {
                                   onMouseEnter={() => setHoveredTaskId(task.id)}
                                   onMouseLeave={() => setHoveredTaskId(null)}
                                   aria-pressed={selected}
-                                  className={`group absolute flex h-9 items-center justify-center rounded-md px-2 text-xs font-semibold shadow-sm transition-[filter,box-shadow,min-width] hover:z-40 hover:min-w-max hover:px-3 focus:z-40 focus:min-w-max focus:px-3 focus:outline-none focus:ring-2 focus:ring-[#211b16] focus:ring-offset-2 ${
+                                  className={`group absolute flex items-center justify-center rounded-md text-xs font-semibold shadow-sm transition-[filter,box-shadow,min-width] hover:z-40 hover:min-w-max hover:px-2 focus:z-40 focus:min-w-max focus:px-2 focus:outline-none focus:ring-2 focus:ring-[#211b16] focus:ring-offset-2 ${
                                     laneStyles[task.lane]
                                   } ${
                                     selected
@@ -1022,11 +1502,24 @@ export default function Home() {
                                     expanded
                                       ? "z-40 min-w-max px-3"
                                       : "z-20 overflow-hidden"
+                                  } ${
+                                    completed ? "opacity-55 saturate-50" : ""
+                                  } ${
+                                    isCockpitFullscreen ? "h-7" : "h-9"
+                                  } ${
+                                    expanded ? "px-2" : "px-1.5"
                                   }`}
                                   style={{
-                                    left: getTaskLeft(task),
-                                    top: `${0.5 + task.visualTrack * 2.75}rem`,
-                                    width: `calc(${getTaskWidth(task)} - 0.25rem)`,
+                                    left: anchorToRight
+                                      ? undefined
+                                      : getTaskLeft(task, totalMinutes),
+                                    right: anchorToRight
+                                      ? getTaskRight(task, totalMinutes)
+                                      : undefined,
+                                    top: isCockpitFullscreen
+                                      ? `${0.35 + task.visualTrack * 2.1}rem`
+                                      : `${0.5 + task.visualTrack * 2.75}rem`,
+                                    width: `calc(${getTaskWidth(task, totalMinutes)} - 0.25rem)`,
                                   }}
                                   title={`${task.id}. ${task.instruction}`}
                                 >
@@ -1034,12 +1527,13 @@ export default function Home() {
                                     className={
                                       expanded
                                         ? "whitespace-nowrap"
-                                        : "truncate group-hover:overflow-visible group-hover:text-clip group-hover:whitespace-nowrap group-focus:overflow-visible group-focus:text-clip group-focus:whitespace-nowrap"
+                                        : "min-w-0 truncate group-hover:overflow-visible group-hover:text-clip group-hover:whitespace-nowrap group-focus:overflow-visible group-focus:text-clip group-focus:whitespace-nowrap"
                                     }
                                   >
-                                    {expanded
+                                    {expanded || task.durationMinutes >= 3
                                       ? getExpandedBlockLabel(task)
-                                      : getExpandedBlockLabel(task)}
+                                      : task.id}
+                                    {completed ? " Done" : ""}
                                   </span>
                                 </button>
                               );
@@ -1052,27 +1546,84 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          </div>
+            </div>
 
-          <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <aside className="rounded-lg border border-[#ddcdb9] bg-white p-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                Selected task
-              </p>
+          <section
+            className={`grid min-h-0 gap-6 ${
+              isCockpitFullscreen
+                ? "flex-1 grid-cols-[24rem_minmax(0,1fr)_24rem] items-stretch overflow-hidden"
+                : "relative left-1/2 w-[calc(100vw-1rem)] -translate-x-1/2 px-6 sm:px-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-12 2xl:h-[calc(100dvh-34rem)] 2xl:min-h-[18rem] 2xl:grid-cols-[28rem_minmax(0,1fr)_26rem] 2xl:items-stretch 2xl:overflow-hidden"
+            }`}
+          >
+            <div
+              className={`min-h-0 ${
+                isCockpitFullscreen ? "block" : "hidden 2xl:block"
+              }`}
+            >
+              <IngredientsPanel
+                ingredients={activeRecipe.ingredients}
+                className="h-full"
+                scrollable
+              />
+            </div>
+
+            <aside className="min-h-0 rounded-lg border border-[#ddcdb9] bg-white p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
+                  Selected task
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleToggleSelectedTaskDone}
+                    className={`inline-flex h-8 items-center justify-center rounded-md px-3 text-xs font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 ${
+                      completedTaskIds.has(selectedTask.id)
+                        ? "border border-[#ddcdb9] bg-white text-[#3e342d] hover:border-[#8a5a22]"
+                        : "bg-[#2f6f4e] text-white hover:bg-[#285f43]"
+                    }`}
+                  >
+                    {completedTaskIds.has(selectedTask.id)
+                      ? "Mark not done"
+                      : "Done"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSelectNextStep}
+                    disabled={!getNextStep(selectedTask.id)}
+                    className="inline-flex h-8 items-center justify-center rounded-md border border-[#ddcdb9] bg-white px-3 text-xs font-semibold text-[#3e342d] transition hover:border-[#8a5a22] focus:outline-none focus:ring-2 focus:ring-[#2f6f4e] focus:ring-offset-2 disabled:cursor-not-allowed disabled:border-[#e7d9c8] disabled:text-[#a99b8e]"
+                  >
+                    Next Step
+                  </button>
+                  {completedTaskIds.has(selectedTask.id) ? (
+                    <span className="rounded bg-[#eef7f0] px-2 py-1 text-xs font-semibold text-[#2f6f4e]">
+                      Done
+                    </span>
+                  ) : null}
+                </div>
+              </div>
               <div className="mt-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-2xl font-semibold tracking-tight">
+                <div className="min-w-0">
+                  <h2 className="text-2xl font-semibold tracking-tight 2xl:text-3xl">
                     {selectedTask.id}. {selectedTask.shortLabel}
                   </h2>
-                  <p className="mt-2 text-lg text-[#3e342d]">
-                    {selectedTask.instruction}
+                  <p className="mt-2 text-lg leading-8 text-[#3e342d] 2xl:text-xl">
+                    {highlightIngredients(
+                      selectedTask.instruction,
+                      activeRecipe.ingredients,
+                    )}
                   </p>
                 </div>
-                <span
-                  className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${laneStyles[selectedTask.lane]}`}
-                >
-                  {selectedTask.lane}
-                </span>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <span className="rounded-md bg-[#f8efe3] px-3 py-2 text-sm font-semibold text-[#8a5a22]">
+                    {formatDuration(selectedTask)}
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold ${laneStyles[selectedTask.lane]}`}
+                  >
+                    <LaneIcon lane={selectedTask.lane} />
+                    {selectedTask.lane}
+                  </span>
+                </div>
               </div>
 
               <dl className="mt-6 grid gap-4 sm:grid-cols-3">
@@ -1089,7 +1640,11 @@ export default function Home() {
                     Status
                   </dt>
                   <dd className="mt-1 font-semibold">
-                    {getTaskStatus(selectedTask)}
+                    {getTaskStatus(
+                      selectedTask,
+                      currentMinute,
+                      completedTaskIds,
+                    )}
                   </dd>
                 </div>
                 <div className="rounded-md bg-[#f8efe3] p-3">
@@ -1101,90 +1656,41 @@ export default function Home() {
                   </dd>
                 </div>
               </dl>
+
             </aside>
 
-            <aside className="rounded-lg border border-[#ddcdb9] bg-white p-5">
+            <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[#ddcdb9] bg-white p-5">
               <h2 className="text-xl font-semibold tracking-tight">
-                Now / Next / Later
+                Steps
               </h2>
               <p className="mt-1 text-sm text-[#6d5e51]">
-                Showing all {allTasks.length} extracted steps for prototype
-                review.
+                Select any step to inspect or mark it done.
               </p>
-              <div className="mt-5 space-y-5">
-                {completedTasks.length > 0 ? (
-                  <section>
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                      Completed
-                    </h3>
-                    <ul className="mt-2 space-y-2">
-                      {completedTasks.map((task) => (
-                        <TaskSummary
-                          key={`completed-${task.id}`}
-                          task={task}
-                          selected={task.id === selectedTask.id}
-                          onSelect={setSelectedTaskId}
-                        />
-                      ))}
-                    </ul>
-                  </section>
-                ) : null}
+              <ul className="mt-5 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                {orderedTasks.map((task) => {
+                  const statusLabel = getTaskStatus(
+                    task,
+                    currentMinute,
+                    completedTaskIds,
+                  );
+                  const completed = statusLabel === "Done";
 
-                <section>
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                    Now
-                  </h3>
-                  <ul className="mt-2 space-y-2">
-                    {activeTasks.length > 0 ? (
-                      activeTasks.map((task) => (
-                        <TaskSummary
-                          key={`now-${task.id}`}
-                          task={task}
-                          selected={task.id === selectedTask.id}
-                          onSelect={setSelectedTaskId}
-                        />
-                      ))
-                    ) : (
-                      <li className="rounded-md border border-[#ddcdb9] bg-white px-3 py-2 text-sm text-[#6d5e51]">
-                        No active task at minute {currentMinute}.
-                      </li>
-                    )}
-                  </ul>
-                </section>
-
-                {nextTask ? (
-                  <section>
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                      Next
-                    </h3>
-                    <ul className="mt-2 space-y-2">
-                      <TaskSummary
-                        task={nextTask}
-                        selected={nextTask.id === selectedTask.id}
-                        onSelect={setSelectedTaskId}
-                      />
-                    </ul>
-                  </section>
-                ) : null}
-
-                <section>
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[#8a5a22]">
-                    Later
-                  </h3>
-                  <ul className="mt-2 space-y-2">
-                    {laterTasks.map((task) => (
-                      <TaskSummary
-                        key={`later-${task.id}`}
-                        task={task}
-                        selected={task.id === selectedTask.id}
-                        onSelect={setSelectedTaskId}
-                      />
-                    ))}
-                  </ul>
-                </section>
-              </div>
+                  return (
+                    <TaskSummary
+                      key={`step-${task.id}`}
+                      task={task}
+                      selected={task.id === selectedTask.id}
+                      completed={completed}
+                      statusLabel={statusLabel}
+                      onSelect={setSelectedTaskId}
+                    />
+                  );
+                })}
+              </ul>
             </aside>
           </section>
+            </div>
+          </div>
         </section>
         ) : (
           <section className="rounded-lg border border-[#ddcdb9] bg-white p-8 text-center">
